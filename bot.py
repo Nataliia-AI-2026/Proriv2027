@@ -313,6 +313,8 @@ async def show_contacts(chat_id, context, uid=0):
     rows = [[(T.BTN_WRITE_ME, "write:contacts")], [(T.BTN_HOME, "home")]]
     if launch:  # у агенті з продажами «Про мене» живе тут, бо головна кнопка меню зайнята запуском
         rows[1].insert(0, (T.BTN_MAIN, "about"))
+    if T.CHANNEL_LINK:  # група чи канал власниці: кнопка першою
+        rows.insert(0, [(T.BTN_GROUP, T.CHANNEL_LINK)])
     await send(context.bot, chat_id, T.CONTACTS, kb(rows), T.PHOTOS.get("contacts"))
 
 

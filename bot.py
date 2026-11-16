@@ -13,8 +13,8 @@ from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton, Inl
                       ReplyKeyboardMarkup, Update)
 from telegram.constants import ParseMode
 from telegram.error import Forbidden
-from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
-                          MessageHandler, filters)
+from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
+                          ContextTypes, MessageHandler, filters)
 
 import config
 import db
@@ -124,30 +124,62 @@ async def notify_admins(bot, text, **k):
 
 # ================== підписка на канал (за бажанням) ==================
 
+def gate_on():
+    return bool(T.CHANNEL or T.CHANNEL_LINK)
+
+
+def channel_chat():
+    """Канал для перевірки: @назва з texts.py або ID закритого каналу, який агент запам'ятав сам."""
+    return T.CHANNEL or db.kv("channel_id") or ""
+
+
+async def gate_warn(bot):
+    day = datetime.now(config.TZ).strftime("%Y-%m-%d")
+    if db.kv("gate_warn") != day:  # власниці раз на добу
+        db.kv("gate_warn", day)
+        await notify_admins(bot, T.ADMIN_GATE_WARN)
+
+
 async def gate_ok(bot, chat_id, uid, src=None, is_new=False):
     """True, якщо можна далі. Якщо канал не задано, людина вже підписана або агент не може перевірити, пропускаємо."""
-    if not T.CHANNEL or config.is_admin(uid) or db.kv(f"gate:{uid}") == "1":
+    if not gate_on() or config.is_admin(uid) or db.kv(f"gate:{uid}") == "1":
+        return True
+    chat = channel_chat()
+    if not chat:  # закритий канал, а агента ще не додали адміністратором
+        await gate_warn(bot)
         return True
     try:
-        m = await bot.get_chat_member(T.CHANNEL, uid)
+        m = await bot.get_chat_member(int(chat) if str(chat).lstrip("-").isdigit() else chat, uid)
         if m.status in ("member", "administrator", "creator", "restricted"):
             db.kv(f"gate:{uid}", "1")
             db.log_ev(uid, "gate_ok")
             return True
     except Exception as e:
-        log.warning("gate %s: %s", T.CHANNEL, e)
-        day = datetime.now(config.TZ).strftime("%Y-%m-%d")
-        if db.kv("gate_warn") != day:  # власниці раз на добу
-            db.kv("gate_warn", day)
-            await notify_admins(bot, T.ADMIN_GATE_WARN.format(channel=esc(T.CHANNEL)))
+        log.warning("gate %s: %s", chat, e)
+        await gate_warn(bot)
         return True
     if src is not None:  # запам'ятати, куди людина йшла, щоб продовжити після підписки
         db.kv(f"gate_src:{uid}", src)
         db.kv(f"gate_new:{uid}", "1" if is_new else "")
-    url = "https://t.me/" + T.CHANNEL.lstrip("@")
+    url = T.CHANNEL_LINK or "https://t.me/" + T.CHANNEL.lstrip("@")
     await bot.send_message(chat_id, T.GATE, parse_mode=HTML,
                            reply_markup=kb([[(T.BTN_GATE_SUB, url)], [(T.BTN_GATE_CHECK, "gate")]]))
     return False
+
+
+async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Агента додали в канал адміністратором (або прибрали): запам'ятовуємо закритий канал сам, без копіювання ID."""
+    cm = update.my_chat_member
+    if not cm or cm.chat.type != "channel" or T.CHANNEL:
+        return
+    title = esc(cm.chat.title)
+    if cm.new_chat_member.status == "administrator":
+        if cm.from_user and config.is_admin(cm.from_user.id) and db.kv("channel_id") != str(cm.chat.id):
+            db.kv("channel_id", str(cm.chat.id))
+            await notify_admins(context.bot, T.ADMIN_CHANNEL_OK.format(title=title))
+    elif db.kv("channel_id") == str(cm.chat.id):
+        db.kv("channel_id", "")
+        await notify_admins(context.bot, T.ADMIN_CHANNEL_LOST.format(title=title))
 
 
 # ================== старт і меню ==================
@@ -175,7 +207,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def after_start(context, chat_id, uid, src, is_new):
     """Що робити після старту (і після підписки на канал): подарунок новим і розділ за міткою ?start=..."""
-    if (is_new or src == "gift") and T.GIFT_FILE:
+    if (is_new or src == "gift") and (T.GIFT_FILE or T.GIFT_LINK):
         await send_gift(context.bot, chat_id, uid)
     # Мітка ?start=... може одразу відкривати розділ: ?start=p1 → продукт p1, ?start=ask → питання, ?start=about
     if launch and await launch.on_start(context, chat_id, uid, src):
@@ -189,6 +221,11 @@ async def after_start(context, chat_id, uid, src, is_new):
 
 
 async def send_gift(bot, chat_id, uid):
+    if T.GIFT_LINK:  # подарунок-посилання (наприклад, відео на YouTube): текст і кнопка
+        await bot.send_message(chat_id, T.GIFT_TEXT, parse_mode=HTML, reply_markup=kb([[(T.GIFT_BTN, T.GIFT_LINK)]]))
+        db.log_ev(uid, "gift")
+        db.kv(f"gift:{uid}", "1")
+        return
     path = media_path(T.GIFT_FILE)
     if not path:
         return
@@ -199,6 +236,7 @@ async def send_gift(bot, chat_id, uid):
         if not fid and m.document:
             db.kv(fid_key, m.document.file_id)
         db.log_ev(uid, "gift")
+        db.kv(f"gift:{uid}", "1")
     except Exception as e:
         log.warning("gift: %s", e)
 
@@ -279,7 +317,7 @@ async def show_admin(chat_id, context, edit_msg=None):
     total, week, src = db.stats()
     sources = "\n".join(f"• {esc(s)}: {n}" for s, n in src) or "• поки нікого"
     text = T.ADMIN_MENU.format(total=total, week=week, sources=sources)
-    rows = [[(T.BTN_BROADCAST, "bc"), (T.BTN_REPORT, "report")], [(T.BTN_STATS, "adm")]]
+    rows = [[(T.BTN_BROADCAST, "bc"), (T.BTN_REPORT, "report")], [(T.BTN_LINKS, "links"), (T.BTN_STATS, "adm")]]
     if launch:
         rows = launch.admin_rows() + rows
     markup = kb(rows)
@@ -292,6 +330,13 @@ async def show_admin(chat_id, context, edit_msg=None):
     await context.bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=markup)
 
 
+def links_text(bot_name):
+    base = f"https://t.me/{bot_name}?start="
+    tags = "\n".join(f"• {esc(n)}: <code>{base}{t}</code>" for n, t in T.LINK_TAGS)
+    prods = "\n".join(f"• {esc(n)}: <code>{base}{k}</code>" for k, (n, _) in T.PRODUCTS.items())
+    return T.LINKS.format(tags=tags, products=prods)
+
+
 # ================== кнопки під повідомленнями ==================
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -302,12 +347,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     uid, chat_id, data = update.effective_user.id, q.message.chat_id, q.data or ""
     if data == "gate":
-        if T.CHANNEL and not config.is_admin(uid):
+        if gate_on() and not config.is_admin(uid):
             db.kv(f"gate:{uid}", "")
         if await gate_ok(context.bot, chat_id, uid):
             await context.bot.send_message(chat_id, T.GATE_OK, reply_markup=kb_bottom(uid))
             src = db.kv(f"gate_src:{uid}") or ""
-            fresh = db.kv(f"gate_new:{uid}") == "1"
+            fresh = db.kv(f"gate_new:{uid}") == "1" or not db.kv(f"gift:{uid}")  # подарунок обіцяли всім, хто підписався
             db.kv(f"gate_src:{uid}", "")
             db.kv(f"gate_new:{uid}", "")
             await after_start(context, chat_id, uid, src, fresh)
@@ -335,6 +380,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, T.ASK_CANCELLED, reply_markup=kb_bottom(uid))
     elif config.is_admin(uid) and data == "adm":
         await show_admin(chat_id, context, q.message)
+    elif config.is_admin(uid) and data == "links":
+        await context.bot.send_message(chat_id, links_text(context.bot.username), parse_mode=HTML,
+                                       disable_web_page_preview=True)
     elif config.is_admin(uid) and data == "report":
         await context.bot.send_message(chat_id, report_text(), parse_mode=HTML)
     elif config.is_admin(uid) and launch and data == "members":
@@ -549,6 +597,7 @@ def main():
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     if launch:
         launch.add_handlers(app)  # /grupa і задачі продажів за розкладом
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, on_message))

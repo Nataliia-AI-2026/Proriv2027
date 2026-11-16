@@ -140,6 +140,10 @@ Claude кладе з нього файли агента в папку, збер�
 - Емодзі можна / не можна: на вибір Claude, помірно і тепло (❤ ✨ 🙏 🌿 👇 тощо). Без заборонених поки що.
 - Слова й фрази, яких уникати: «карма» як покарання. Інше доповнюватиметься по ходу.
 - Посилання:
+  - Instagram: https://www.instagram.com/nataliia.vasylenko.regres
+  - TikTok: https://www.tiktok.com/@nataliia_regres_karma_
+  - YouTube: https://www.youtube.com/@Наталія_Василенко
+  - Telegram: https://t.me/Nataliia_regres_karma (канал чи особистий, уточнити на етапі 6)
 - Що ще запам'ятати:
 
 ## ПОТОЧНИЙ СТАН (оновлює Claude після кожної роботи)

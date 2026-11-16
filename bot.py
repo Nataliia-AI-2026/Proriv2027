@@ -6,6 +6,7 @@ import asyncio
 import html
 import logging
 import os
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -140,9 +141,16 @@ async def gate_warn(bot):
         await notify_admins(bot, T.ADMIN_GATE_WARN)
 
 
-async def gate_ok(bot, chat_id, uid, src=None, is_new=False):
-    """True, якщо можна далі. Якщо канал не задано, людина вже підписана або агент не може перевірити, пропускаємо."""
-    if not gate_on() or config.is_admin(uid) or db.kv(f"gate:{uid}") == "1":
+GATE_RECHECK = 86400  # підписку перевіряємо знову раз на добу і при кожному «Старт»
+
+
+async def gate_ok(bot, chat_id, uid, src=None, is_new=False, fresh=False):
+    """True, якщо можна далі. Якщо канал не задано, людина підписана або агент не може перевірити, пропускаємо.
+    fresh=True: перевірити зараз, навіть якщо сьогодні вже перевіряли (при «Старт»)."""
+    if not gate_on() or config.is_admin(uid):
+        return True
+    last = db.kv(f"gate:{uid}") or ""
+    if not fresh and last.isdigit() and time.time() - int(last) < GATE_RECHECK:
         return True
     chat = channel_chat()
     if not chat:  # закритий канал, а агента ще не додали адміністратором
@@ -151,8 +159,9 @@ async def gate_ok(bot, chat_id, uid, src=None, is_new=False):
     try:
         m = await bot.get_chat_member(int(chat) if str(chat).lstrip("-").isdigit() else chat, uid)
         if m.status in ("member", "administrator", "creator", "restricted"):
-            db.kv(f"gate:{uid}", "1")
-            db.log_ev(uid, "gate_ok")
+            if not last:
+                db.log_ev(uid, "gate_ok")
+            db.kv(f"gate:{uid}", str(int(time.time())))
             return True
     except Exception as e:
         log.warning("gate %s: %s", chat, e)
@@ -200,7 +209,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(T.WELCOME_BACK.format(name=esc(u.first_name)), parse_mode=HTML,
                                         reply_markup=kb_bottom(u.id))
-    if not await gate_ok(context.bot, chat_id, u.id, src, is_new):
+    if not await gate_ok(context.bot, chat_id, u.id, src, is_new, fresh=True):
         return
     await after_start(context, chat_id, u.id, src, is_new)
 
@@ -347,9 +356,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     uid, chat_id, data = update.effective_user.id, q.message.chat_id, q.data or ""
     if data == "gate":
-        if gate_on() and not config.is_admin(uid):
-            db.kv(f"gate:{uid}", "")
-        if await gate_ok(context.bot, chat_id, uid):
+        if await gate_ok(context.bot, chat_id, uid, fresh=True):
             await context.bot.send_message(chat_id, T.GATE_OK, reply_markup=kb_bottom(uid))
             src = db.kv(f"gate_src:{uid}") or ""
             fresh = db.kv(f"gate_new:{uid}") == "1" or not db.kv(f"gift:{uid}")  # подарунок обіцяли всім, хто підписався

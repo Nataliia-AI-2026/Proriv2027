@@ -536,7 +536,7 @@ async def post_init(app: Application):
         except Exception as e:
             log.warning("admin commands %s: %s", a, e)
     # «Агента оновлено»: один раз на кожну нову версію з texts.VERSION
-    if db.kv("version") != T.VERSION:
+    if config.ADMIN_IDS and db.kv("version") != T.VERSION:  # без ADMIN_ID не позначаємо, щоб повідомлення не загубилось
         db.kv("version", T.VERSION)
         await notify_admins(app.bot, T.ADMIN_UPDATED.format(version=T.VERSION, notes="\n".join(f"• {n}" for n in T.NOTES)))
 

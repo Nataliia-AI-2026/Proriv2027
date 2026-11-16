@@ -168,9 +168,9 @@ async def gate_ok(bot, chat_id, uid, src=None, is_new=False):
 
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Агента додали в канал адміністратором (або прибрали): запам'ятовуємо закритий канал сам, без копіювання ID."""
+    """Агента додали в канал чи групу адміністратором (або прибрали): запам'ятовуємо їх сам, без копіювання ID."""
     cm = update.my_chat_member
-    if not cm or cm.chat.type != "channel" or T.CHANNEL:
+    if not cm or cm.chat.type not in ("channel", "supergroup", "group") or T.CHANNEL:
         return
     title = esc(cm.chat.title)
     if cm.new_chat_member.status == "administrator":

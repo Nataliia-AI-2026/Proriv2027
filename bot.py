@@ -324,7 +324,7 @@ async def ask_start(chat_id, context, uid, topic=""):
 
 async def show_admin(chat_id, context, edit_msg=None):
     total, week, src = db.stats()
-    sources = "\n".join(f"• {esc(s)}: {n}" for s, n in src) or "• поки нікого"
+    sources = "\n".join(f"• {esc(s if s not in ('', 'direct') else 'напряму')}: {n}" for s, n in src) or "• поки нікого"
     text = T.ADMIN_MENU.format(total=total, week=week, sources=sources)
     rows = [[(T.BTN_BROADCAST, "bc"), (T.BTN_REPORT, "report")], [(T.BTN_LINKS, "links"), (T.BTN_STATS, "adm")]]
     if launch:

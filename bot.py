@@ -94,7 +94,7 @@ async def send(bot, chat_id, text, markup=None, media=""):
     довший текст іде окремим повідомленням після фото. file_id запам'ятовуємо, щоб не вантажити файл щоразу."""
     path = media_path(media)
     if path:
-        fid_key = f"fid:{media}:{int(os.path.getmtime(path))}"
+        fid_key = f"fid:{bot.id}:{media}:{int(os.path.getmtime(path))}"  # file_id свій у кожного агента
         fid = db.kv(fid_key)
         short = len(text) <= 1000
         is_video = path.lower().endswith((".mp4", ".mov"))
@@ -183,7 +183,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     title = esc(cm.chat.title)
     if cm.new_chat_member.status == "administrator":
-        if cm.from_user and config.is_admin(cm.from_user.id) and db.kv("channel_id") != str(cm.chat.id):
+        if cm.from_user and config.is_admin(cm.from_user.id):
             db.kv("channel_id", str(cm.chat.id))
             await notify_admins(context.bot, T.ADMIN_CHANNEL_OK.format(title=title))
     elif db.kv("channel_id") == str(cm.chat.id):
@@ -238,7 +238,7 @@ async def send_gift(bot, chat_id, uid):
     path = media_path(T.GIFT_FILE)
     if not path:
         return
-    fid_key = f"fid:{T.GIFT_FILE}:{int(os.path.getmtime(path))}"
+    fid_key = f"fid:{bot.id}:{T.GIFT_FILE}:{int(os.path.getmtime(path))}"
     fid = db.kv(fid_key)
     try:
         m = await bot.send_document(chat_id, fid or open(path, "rb"), caption=T.GIFT_TEXT, parse_mode=HTML)

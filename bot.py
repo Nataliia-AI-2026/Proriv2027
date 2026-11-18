@@ -328,7 +328,8 @@ async def show_admin(chat_id, context, edit_msg=None):
     total, week, src = db.stats()
     sources = "\n".join(f"• {esc(s if s not in ('', 'direct') else 'напряму')}: {n}" for s, n in src) or "• поки нікого"
     text = T.ADMIN_MENU.format(total=total, week=week, sources=sources)
-    rows = [[(T.BTN_BROADCAST, "bc"), (T.BTN_REPORT, "report")], [(T.BTN_LINKS, "links"), (T.BTN_STATS, "adm")]]
+    rows = [[(T.BTN_BROADCAST, "bc"), (T.BTN_REPORT, "report")], [(T.BTN_PEOPLE, "people"), (T.BTN_LINKS, "links")],
+            [(T.BTN_STATS, "adm")]]
     if launch:
         rows = launch.admin_rows() + rows
     markup = kb(rows)
@@ -339,6 +340,19 @@ async def show_admin(chat_id, context, edit_msg=None):
         except Exception:
             pass
     await context.bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=markup)
+
+
+def people_text():
+    users = [u for u in db.recent_users(30) if not config.is_admin(u["user_id"])]
+    total = db.stats()[0] - len([a for a in config.ADMIN_IDS if db.user(a)])
+    rows = []
+    for u in users:
+        name = esc(u["name"] or "без імені")
+        who_ = f'{name} (@{esc(u["username"])})' if u["username"] else f'<a href="tg://user?id={u["user_id"]}">{name}</a>'
+        src = esc(u["src"]) if u["src"] not in ("", "direct", None) else "напряму"
+        date = datetime.fromtimestamp(u["joined"] or 0, config.TZ).strftime("%d.%m")
+        rows.append(T.PEOPLE_ROW.format(who=who_, src=src, date=date, blocked=T.PEOPLE_BLOCKED if u["blocked"] else ""))
+    return T.PEOPLE.format(total=total, rows="\n".join(rows)) if rows else T.PEOPLE_EMPTY
 
 
 def links_text(bot_name):
@@ -389,6 +403,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, T.ASK_CANCELLED, reply_markup=kb_bottom(uid))
     elif config.is_admin(uid) and data == "adm":
         await show_admin(chat_id, context, q.message)
+    elif config.is_admin(uid) and data == "people":
+        await context.bot.send_message(chat_id, people_text(), parse_mode=HTML, disable_web_page_preview=True)
     elif config.is_admin(uid) and data == "links":
         await context.bot.send_message(chat_id, links_text(context.bot.username), parse_mode=HTML,
                                        disable_web_page_preview=True)

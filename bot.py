@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup,
                       ReplyKeyboardMarkup, Update)
 from telegram.constants import ParseMode
-from telegram.error import Forbidden
+from telegram.error import Forbidden, NetworkError, TimedOut
 from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
@@ -572,7 +572,12 @@ async def report_job(context):
 # ================== помилки, запуск ==================
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
-    log.exception("error", exc_info=context.error)
+    err = context.error
+    if isinstance(err, (NetworkError, TimedOut)) or "httpx" in str(err) or type(err).__module__.startswith("httpx"):
+        # короткий збій зв'язку з Telegram: агент сам підключається знову, власницю не турбуємо
+        log.warning("network: %s", err)
+        return
+    log.exception("error", exc_info=err)
     try:
         if isinstance(update, Update) and update.effective_chat and update.effective_chat.type == "private":
             await context.bot.send_message(update.effective_chat.id, T.ERROR_USER)

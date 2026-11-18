@@ -47,6 +47,14 @@ def user(uid):
     return dict(r) if r else None
 
 
+def recent_users(limit=30):
+    """Останні люди: найновіші зверху."""
+    with conn() as c:
+        rows = c.execute("SELECT user_id, name, username, src, joined, blocked FROM users ORDER BY joined DESC LIMIT ?",
+                         (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def active_ids():
     with conn() as c:
         return [r[0] for r in c.execute("SELECT user_id FROM users WHERE COALESCE(blocked,0)=0").fetchall()]

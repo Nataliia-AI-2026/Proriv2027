@@ -25,6 +25,8 @@ def init():
             joined INTEGER, last_seen INTEGER, blocked INTEGER DEFAULT 0)""")
         c.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
         c.execute("CREATE TABLE IF NOT EXISTS events (user_id INTEGER, ev TEXT, extra TEXT, at INTEGER)")
+        c.execute("""CREATE TABLE IF NOT EXISTS ideas (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT,
+            chat_id INTEGER, msg_id INTEGER, created INTEGER, done INTEGER DEFAULT 0)""")
 
 
 def touch_user(uid, name, username, src=""):
@@ -53,6 +55,28 @@ def recent_users(limit=30):
         rows = c.execute("SELECT user_id, name, username, src, joined, blocked FROM users ORDER BY joined DESC LIMIT ?",
                          (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def idea_add(text, chat_id=0, msg_id=0):
+    with conn() as c:
+        c.execute("INSERT INTO ideas (text, chat_id, msg_id, created) VALUES (?,?,?,?)",
+                  (text, chat_id, msg_id, int(time.time())))
+
+
+def ideas_open():
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM ideas WHERE done=0 ORDER BY id").fetchall()]
+
+
+def idea(idea_id):
+    with conn() as c:
+        r = c.execute("SELECT * FROM ideas WHERE id=?", (idea_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def idea_done(idea_id):
+    with conn() as c:
+        c.execute("UPDATE ideas SET done=1 WHERE id=?", (idea_id,))
 
 
 def active_ids():

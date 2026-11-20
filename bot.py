@@ -329,7 +329,7 @@ async def show_admin(chat_id, context, edit_msg=None):
     sources = "\n".join(f"• {esc(s if s not in ('', 'direct') else 'напряму')}: {n}" for s, n in src) or "• поки нікого"
     text = T.ADMIN_MENU.format(total=total, week=week, sources=sources)
     rows = [[(T.BTN_BROADCAST, "bc"), (T.BTN_REPORT, "report")], [(T.BTN_PEOPLE, "people"), (T.BTN_LINKS, "links")],
-            [(T.BTN_STATS, "adm")]]
+            [(T.BTN_IDEAS, "ideas"), (T.BTN_STATS, "adm")]]
     if launch:
         rows = launch.admin_rows() + rows
     markup = kb(rows)
@@ -340,6 +340,42 @@ async def show_admin(chat_id, context, edit_msg=None):
         except Exception:
             pass
     await context.bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=markup)
+
+
+def ideas_view(head):
+    """Текст і кнопки списку ідей: ✅ N викреслює ідею, 🎤 N програє голосову."""
+    items = db.ideas_open()
+    if not items:
+        return T.IDEAS_EMPTY, kb([[(T.BTN_IDEA_ADD, "idea_add")], [(T.BTN_HOME, "home")]])
+    rows, btns = [], []
+    for n, i in enumerate(items, 1):
+        rows.append(f"{n}. {esc(i['text'])}")
+        btns.append((f"✅ {n}", f"idea_ok:{i['id']}"))
+        if i["msg_id"]:
+            btns.append((f"🎤 {n}", f"idea_play:{i['id']}"))
+    grid = [btns[k:k + 4] for k in range(0, len(btns), 4)]
+    return head.format(rows="\n".join(rows)), kb(grid + [[(T.BTN_IDEA_ADD, "idea_add")], [(T.BTN_HOME, "home")]])
+
+
+async def send_ideas(bot, chat_id, head=None):
+    text, markup = ideas_view(head or T.IDEAS)
+    await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=markup)
+
+
+async def ideas_job(context):
+    """Щовечора о IDEAS_HOUR нагадує власниці про невиконані ідеї (один раз на день)."""
+    now = datetime.now(config.TZ)
+    if now.hour < T.IDEAS_HOUR or not config.ADMIN_IDS or not db.ideas_open():
+        return
+    day = now.strftime("%Y-%m-%d")
+    if db.kv("ideas_day") == day:
+        return
+    db.kv("ideas_day", day)  # ДО відправки: після перезапуску повтору не буде
+    for a in config.ADMIN_IDS:
+        try:
+            await send_ideas(context.bot, a, T.IDEAS_EVENING)
+        except Exception as e:
+            log.warning("ideas to admin %s: %s", a, e)
 
 
 def people_text():
@@ -403,6 +439,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, T.ASK_CANCELLED, reply_markup=kb_bottom(uid))
     elif config.is_admin(uid) and data == "adm":
         await show_admin(chat_id, context, q.message)
+    elif config.is_admin(uid) and data == "ideas":
+        await send_ideas(context.bot, chat_id)
+    elif config.is_admin(uid) and data == "idea_add":
+        state(uid, "idea_wait")
+        await context.bot.send_message(chat_id, T.IDEA_ASK, reply_markup=kb([[(T.BTN_CANCEL, "idea_no")]]))
+    elif config.is_admin(uid) and data == "idea_no":
+        state(uid, "")
+        await context.bot.send_message(chat_id, T.MENU_HINT, reply_markup=kb_bottom(uid))
+    elif config.is_admin(uid) and data.startswith("idea_ok:") and data[8:].isdigit():
+        db.idea_done(int(data[8:]))
+        await context.bot.send_message(chat_id, T.IDEA_DONE)
+        await send_ideas(context.bot, chat_id)
+    elif config.is_admin(uid) and data.startswith("idea_play:") and data[10:].isdigit():
+        i = db.idea(int(data[10:]))
+        if i and i["msg_id"]:
+            try:
+                await context.bot.copy_message(chat_id, i["chat_id"], i["msg_id"])
+            except Exception as e:
+                log.warning("idea voice: %s", e)
     elif config.is_admin(uid) and data == "people":
         await context.bot.send_message(chat_id, people_text(), parse_mode=HTML, disable_web_page_preview=True)
     elif config.is_admin(uid) and data == "links":
@@ -476,6 +531,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     st = state(uid)
+
+    # 3а) Власниця записує ідею (текстом або голосовим)
+    if config.is_admin(uid) and st == "idea_wait":
+        state(uid, "")
+        if text:
+            db.idea_add(text[:1000])
+        else:
+            label = msg.caption or T.IDEA_VOICE.format(date=datetime.now(config.TZ).strftime("%d.%m %H:%M"))
+            db.idea_add(label[:1000], chat_id, msg.message_id)
+        await msg.reply_text(T.IDEA_SAVED.format(hour=T.IDEAS_HOUR), reply_markup=kb_bottom(uid))
+        await send_ideas(context.bot, chat_id)
+        return
 
     # 3) Власниця готує розсилку: показуємо прев'ю
     if config.is_admin(uid) and st == "bc_wait":
@@ -632,6 +699,7 @@ def main():
         launch.add_handlers(app)  # /grupa і задачі продажів за розкладом
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, on_message))
     app.job_queue.run_repeating(report_job, interval=600, first=60)  # звіт о 9:00, один раз на день
+    app.job_queue.run_repeating(ideas_job, interval=300, first=90)   # ідеї о 19:00, один раз на день
     app.add_error_handler(on_error)
     log.info("Агент запускається")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

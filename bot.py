@@ -41,13 +41,14 @@ def main_button():
 
 
 def menu_buttons():
-    b = [main_button(), T.BTN_MAIN, T.BTN_PRODUCTS, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN]
+    b = [main_button(), T.BTN_MAIN, T.BTN_PUTIVNYK, T.BTN_PRORYV, T.BTN_PRODUCTS, T.BTN_ASK, T.BTN_CABINET,
+         T.BTN_CONTACTS, T.BTN_ADMIN]
     return set(b)
 
 
 def kb_bottom(uid):
     """Нижнє меню: широка головна кнопка зверху, далі по 2 в ряд. Власниці ще «Керування»."""
-    rows = [[main_button()], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
+    rows = [[main_button()], [T.BTN_PUTIVNYK, T.BTN_PRORYV], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
@@ -506,6 +507,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_about(chat_id, context, uid)
         elif text == T.BTN_PRODUCTS:
             await show_products(chat_id, context, uid=uid)
+        elif text in (T.BTN_PUTIVNYK, T.BTN_PRORYV):
+            key = "putivnyk" if text == T.BTN_PUTIVNYK else "proryv"
+            db.log_ev(uid, "product", key)
+            await show_product(chat_id, context, key)
         elif text == T.BTN_ASK:
             await ask_start(chat_id, context, uid)
         elif text == T.BTN_CABINET:

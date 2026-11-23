@@ -284,6 +284,27 @@ async def send_gift(bot, chat_id, uid):
         log.warning("gift: %s", e)
 
 
+async def send_doc(bot, chat_id, which):
+    """Договір оферти чи Політика: PDF-файл з images/. Якщо файлу немає, посилання як запасний варіант."""
+    rel, caption, url = ((T.DOC_OFFER_FILE, T.DOC_OFFER_CAPTION, T.DOC_OFFER) if which == "offer"
+                         else (T.DOC_PRIVACY_FILE, T.DOC_PRIVACY_CAPTION, T.DOC_PRIVACY))
+    path = media_path(rel)
+    if path:
+        fid_key = f"fid:{bot.id}:{rel}:{int(os.path.getmtime(path))}"
+        fid = db.kv(fid_key)
+        try:
+            m = await bot.send_document(chat_id, fid or open(path, "rb"), caption=caption, parse_mode=HTML)
+            if not fid and m.document:
+                db.kv(fid_key, m.document.file_id)
+            return
+        except Exception as e:
+            log.warning("doc %s: %s", rel, e)
+    rows = [[(T.BTN_OFFER if which == "offer" else T.BTN_PRIVACY, url)]]
+    if T.CHANNEL_LINK:
+        rows.append([(T.BTN_JOIN_GROUP, T.CHANNEL_LINK)])
+    await bot.send_message(chat_id, T.DOCS_TEXT, reply_markup=kb(rows))
+
+
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state(update.effective_user.id, "")
     await update.message.reply_text(T.MENU_HINT, reply_markup=kb_bottom(update.effective_user.id))
@@ -483,12 +504,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.kv(f"paid_sent:{uid}", "")  # нова оплата: подякувати знову
         await context.bot.send_message(chat_id, T.PAID_ASK, reply_markup=kb([[(T.BTN_CANCEL, "ask_cancel")]]))
     elif data in ("doc:offer", "doc:privacy"):
-        url = T.DOC_OFFER if data == "doc:offer" else T.DOC_PRIVACY
-        btn = T.BTN_OFFER if data == "doc:offer" else T.BTN_PRIVACY
-        rows = [[(btn, url)]]
-        if T.CHANNEL_LINK:
-            rows.append([(T.BTN_JOIN_GROUP, T.CHANNEL_LINK)])
-        await context.bot.send_message(chat_id, T.DOCS_TEXT, reply_markup=kb(rows))
+        await send_doc(context.bot, chat_id, data[4:])
     elif data.startswith("write:"):
         await ask_start(chat_id, context, uid, data[6:])
     elif data == "ask_cancel":

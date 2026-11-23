@@ -4,11 +4,12 @@
 Додаток продажів (launch.py + wfp.py + texts_launch.py) підключається сам, якщо ці файли є в папці."""
 import asyncio
 import html
+import re
 import logging
 import os
 import time
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup,
                       ReplyKeyboardMarkup, Update)
@@ -40,15 +41,42 @@ def main_button():
     return T.BTN_LAUNCH if launch else T.BTN_MAIN
 
 
+def sale_on():
+    """Чи діє зараз акція (по T.SALE_UNTIL включно, за Києвом)."""
+    if not T.SALE_UNTIL:
+        return False
+    try:
+        return datetime.now(config.TZ).date() <= date.fromisoformat(T.SALE_UNTIL)
+    except ValueError:
+        return False
+
+
+def product(key):
+    """(назва кнопки, опис) продукту: під час акції з акційною ціною."""
+    name, text = T.PRODUCTS[key]
+    if sale_on() and key in T.SALE:
+        name, swaps = T.SALE[key]
+        for old, new in swaps:
+            text = text.replace(old, new, 1)
+    return name, text
+
+
+# Кнопки нижнього меню, які відкривають продукт (звичайні, акційні і старі назви)
+MENU_PRODUCT_BTNS = {T.BTN_PUTIVNYK: "putivnyk", T.BTN_PRORYV: "proryv",
+                     T.BTN_PUTIVNYK_SALE: "putivnyk", T.BTN_PRORYV_SALE: "proryv", **T.BTN_OLD_ALIASES}
+
+
 def menu_buttons():
-    b = [main_button(), T.BTN_MAIN, T.BTN_PUTIVNYK, T.BTN_PRORYV, T.BTN_PRODUCTS, T.BTN_ASK, T.BTN_CABINET,
-         T.BTN_CONTACTS, T.BTN_ADMIN, *T.BTN_OLD_ALIASES]
+    b = [main_button(), T.BTN_MAIN, T.BTN_PRODUCTS, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
+         *MENU_PRODUCT_BTNS]
     return set(b)
 
 
 def kb_bottom(uid):
     """Нижнє меню: широка головна кнопка зверху, далі по 2 в ряд. Власниці ще «Керування»."""
-    rows = [[main_button()], [T.BTN_PUTIVNYK], [T.BTN_PRORYV], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
+    sale = sale_on()
+    rows = [[main_button()], [T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK],
+            [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
@@ -97,7 +125,7 @@ async def send(bot, chat_id, text, markup=None, media=""):
     if path:
         fid_key = f"fid:{bot.id}:{media}:{int(os.path.getmtime(path))}"  # file_id свій у кожного агента
         fid = db.kv(fid_key)
-        short = len(text) <= 1000
+        short = len(html.unescape(re.sub(r"<[^>]+>", "", text))) <= 1000  # Telegram рахує текст без HTML-тегів
         is_video = path.lower().endswith((".mp4", ".mov"))
         try:
             src = fid or open(path, "rb")
@@ -269,21 +297,22 @@ async def show_about(chat_id, context, uid=0):
 
 async def show_products(chat_id, context, edit_msg=None, uid=0):
     db.log_ev(uid, "products")
-    rows = [[(name, f"prod:{key}")] for key, (name, _) in T.PRODUCTS.items()]
+    rows = [[(product(key)[0], f"prod:{key}")] for key in T.PRODUCTS]
+    title = (T.SALE_BANNER if sale_on() else "") + T.PRODUCTS_TITLE
     if launch:
         rows = launch.product_rows() + rows
     rows.append([(T.BTN_HOME, "home")])
     if edit_msg and edit_msg.text:
         try:
-            await edit_msg.edit_text(T.PRODUCTS_TITLE, parse_mode=HTML, reply_markup=kb(rows))
+            await edit_msg.edit_text(title, parse_mode=HTML, reply_markup=kb(rows))
             return
         except Exception:
             pass
-    await context.bot.send_message(chat_id, T.PRODUCTS_TITLE, parse_mode=HTML, reply_markup=kb(rows))
+    await context.bot.send_message(chat_id, title, parse_mode=HTML, reply_markup=kb(rows))
 
 
 async def show_product(chat_id, context, key, edit_msg=None):
-    name, text = T.PRODUCTS[key]
+    name, text = product(key)
     markup = kb([[(T.BTN_WRITE_ME, f"write:{key}")], [(T.BTN_BACK, "products"), (T.BTN_HOME, "home")]])
     media = T.PRODUCT_PHOTOS.get(key)
     if edit_msg and edit_msg.text and not media_path(media):
@@ -395,7 +424,7 @@ def people_text():
 def links_text(bot_name):
     base = f"https://t.me/{bot_name}?start="
     tags = "\n".join(f"• {esc(n)}: <code>{base}{t}</code>" for n, t in T.LINK_TAGS)
-    prods = "\n".join(f"• {esc(n)}: <code>{base}{k}</code>" for k, (n, _) in T.PRODUCTS.items())
+    prods = "\n".join(f"• {esc(product(k)[0])}: <code>{base}{k}</code>" for k in T.PRODUCTS)
     return T.LINKS.format(tags=tags, products=prods)
 
 
@@ -507,8 +536,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_about(chat_id, context, uid)
         elif text == T.BTN_PRODUCTS:
             await show_products(chat_id, context, uid=uid)
-        elif text in (T.BTN_PUTIVNYK, T.BTN_PRORYV) or text in T.BTN_OLD_ALIASES:
-            key = T.BTN_OLD_ALIASES.get(text) or ("putivnyk" if text == T.BTN_PUTIVNYK else "proryv")
+        elif text in MENU_PRODUCT_BTNS:
+            key = MENU_PRODUCT_BTNS[text]
             db.log_ev(uid, "product", key)
             await show_product(chat_id, context, key)
         elif text == T.BTN_ASK:

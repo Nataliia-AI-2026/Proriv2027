@@ -61,6 +61,11 @@ def product(key):
     return name, text
 
 
+def pay_amount(key):
+    """Сума до оплати: під час акції акційна."""
+    return (T.PAY_AMOUNT_SALE if sale_on() else T.PAY_AMOUNT).get(key, T.PAY_AMOUNT.get(key, ""))
+
+
 # Кнопки нижнього меню, які відкривають продукт (звичайні, акційні і старі назви)
 MENU_PRODUCT_BTNS = {T.BTN_PUTIVNYK: "putivnyk", T.BTN_PRORYV: "proryv",
                      T.BTN_PUTIVNYK_SALE: "putivnyk", T.BTN_PRORYV_SALE: "proryv", **T.BTN_OLD_ALIASES}
@@ -313,7 +318,10 @@ async def show_products(chat_id, context, edit_msg=None, uid=0):
 
 async def show_product(chat_id, context, key, edit_msg=None):
     name, text = product(key)
-    markup = kb([[(T.BTN_WRITE_ME, f"write:{key}")], [(T.BTN_BACK, "products"), (T.BTN_HOME, "home")]])
+    rows = [[(T.BTN_WRITE_ME, f"write:{key}")], [(T.BTN_BACK, "products"), (T.BTN_HOME, "home")]]
+    if key in T.PAY_AMOUNT:
+        rows.insert(0, [(T.BTN_PAY, f"pay:{key}")])
+    markup = kb(rows)
     media = T.PRODUCT_PHOTOS.get(key)
     if edit_msg and edit_msg.text and not media_path(media):
         try:
@@ -462,6 +470,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("prod:") and data[5:] in T.PRODUCTS:
         db.log_ev(uid, "product", data[5:])
         await show_product(chat_id, context, data[5:], q.message)
+    elif data.startswith("pay:") and data[4:] in T.PAY_AMOUNT:
+        key = data[4:]
+        db.log_ev(uid, "pay", key)
+        await context.bot.send_message(
+            chat_id, T.PAY_TEXT.format(title=T.PAY_TITLE[key], amount=pay_amount(key)), parse_mode=HTML,
+            disable_web_page_preview=True,
+            reply_markup=kb([[(T.BTN_PAID, f"paid:{key}")], [(T.BTN_OFFER, "doc:offer"), (T.BTN_PRIVACY, "doc:privacy")],
+                             [(T.BTN_BACK, f"prod:{key}"), (T.BTN_HOME, "home")]]))
+    elif data.startswith("paid:") and data[5:] in T.PAY_AMOUNT:
+        state(uid, data)
+        db.kv(f"paid_sent:{uid}", "")  # нова оплата: подякувати знову
+        await context.bot.send_message(chat_id, T.PAID_ASK, reply_markup=kb([[(T.BTN_CANCEL, "ask_cancel")]]))
+    elif data in ("doc:offer", "doc:privacy"):
+        url = T.DOC_OFFER if data == "doc:offer" else T.DOC_PRIVACY
+        btn = T.BTN_OFFER if data == "doc:offer" else T.BTN_PRIVACY
+        rows = [[(btn, url)]]
+        if T.CHANNEL_LINK:
+            rows.append([(T.BTN_JOIN_GROUP, T.CHANNEL_LINK)])
+        await context.bot.send_message(chat_id, T.DOCS_TEXT, reply_markup=kb(rows))
     elif data.startswith("write:"):
         await ask_start(chat_id, context, uid, data[6:])
     elif data == "ask_cancel":
@@ -586,6 +613,27 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         n = len([i for i in db.active_ids() if not config.is_admin(i)])
         await context.bot.send_message(chat_id, T.BC_PREVIEW.format(n=n),
                                        reply_markup=kb([[(T.BTN_SEND, "bc_go")], [(T.BTN_EDIT, "bc_edit"), (T.BTN_NOT_NOW, "bc_no")]]))
+        return
+
+    # 3б) Людина надсилає квитанцію і дату народження після «✅ Я оплатила»
+    if st.startswith("paid:") and st[5:] in T.PAY_AMOUNT:
+        key = st[5:]
+        first = db.kv(f"paid_sent:{uid}") != key
+        db.kv(f"paid_sent:{uid}", key)
+        if first:
+            db.log_ev(uid, "paid", key)
+        head = T.ADMIN_PAID.format(title=esc(T.PAY_TITLE[key]), amount=esc(pay_amount(key)), who=who(u), uid=uid,
+                                   text=esc(text or msg.caption or "(квитанція нижче)"))
+        for a in config.ADMIN_IDS:
+            try:
+                m = await context.bot.send_message(a, head, parse_mode=HTML)
+                db.kv(f"q:{m.message_id}", uid)
+                if not text:
+                    m2 = await context.bot.copy_message(a, chat_id, msg.message_id)
+                    db.kv(f"q:{m2.message_id}", uid)
+            except Exception as e:
+                log.warning("payment to admin: %s", e)
+        await msg.reply_text(T.PAID_THANKS if first else T.PAID_MORE, reply_markup=kb_bottom(uid))
         return
 
     # 4) Людина ставить питання: передаємо власниці

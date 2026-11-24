@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Адвент-календар</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;0,700;1,600;1,700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* Адвент-календар за макетом власниці. Усе в одиницях --u: макет 853 точки завширшки, тож сторінка
+   однаково виглядає на будь-якому телефоні. Тексти приходять з texts.py (ADVENT_PAGE, ADVENT_DAYS). */
+:root { --u: calc(min(100vw, 520px) / 853); --brown: #3E1D12; --num: #5B2010; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #F6E3CF; }
+body { font-family: Inter, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--brown);
+       -webkit-tap-highlight-color: transparent; }
+body.lock { overflow: hidden; }
+.page { position: relative; width: calc(853 * var(--u)); height: calc(1844 * var(--u)); margin: 0 auto;
+        background: url(/images/advent_bg.jpg) top / 100% 100% no-repeat; overflow: hidden; }
+.a { position: absolute; }
+.kicker { left: 0; right: 0; top: calc(62 * var(--u)); text-align: center; font: italic 700 calc(36 * var(--u)) Lora, Georgia, serif;
+          color: #6E3B1C; display: flex; justify-content: center; align-items: center; gap: calc(22 * var(--u)); }
+.kicker::before, .kicker::after { content: ""; width: calc(48 * var(--u)); height: calc(2 * var(--u)); background: #A0703A; }
+.title { left: 0; right: 0; top: calc(118 * var(--u)); text-align: center; font: 700 calc(72 * var(--u)) Lora, Georgia, serif; }
+.sub { left: 0; right: 0; top: calc(208 * var(--u)); text-align: center; font: 500 calc(31 * var(--u)) Inter, sans-serif; color: #2E1A12; }
+.card { left: calc(46 * var(--u)); width: calc(762 * var(--u)); top: calc(272 * var(--u)); height: calc(186 * var(--u));
+        border-radius: calc(28 * var(--u)); background: rgba(255, 252, 248, .92);
+        box-shadow: 0 calc(6 * var(--u)) calc(22 * var(--u)) rgba(150, 100, 60, .18); border: calc(1.5 * var(--u)) solid rgba(255, 255, 255, .9); }
+.card .t { position: absolute; left: calc(30 * var(--u)); right: calc(30 * var(--u)); top: calc(22 * var(--u)); display: flex;
+           justify-content: space-between; font: 700 calc(29 * var(--u)) Inter, sans-serif; }
+.bar { position: absolute; left: calc(30 * var(--u)); right: calc(30 * var(--u)); top: calc(68 * var(--u)); height: calc(17 * var(--u));
+       border-radius: 99px; background: #EFE5DA; box-shadow: inset 0 1px 2px rgba(0, 0, 0, .08); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(180deg, #F6D98C, #D9A441 60%, #C38A2E);
+         transition: width .6s; }
+.card .s { position: absolute; left: calc(30 * var(--u)); right: calc(24 * var(--u)); top: calc(98 * var(--u));
+           font: 500 calc(27 * var(--u)) / 1.36 Inter, sans-serif; color: #2E1A12; letter-spacing: calc(-.2 * var(--u)); }
+.card .s b { font-weight: 800; }
+.ic { display: inline-block; vertical-align: -12%; background: center / contain no-repeat; }
+.gline { left: calc(40 * var(--u)); width: calc(773 * var(--u)); height: calc(2.4 * var(--u));
+         background: linear-gradient(90deg, rgba(201, 151, 70, 0), #C9984A 6%, #E3C27C 50%, #C9984A 94%, rgba(201, 151, 70, 0)); }
+.ball { background: center / 100% 100% no-repeat transparent; border: 0; cursor: pointer; display: block; transition: transform .15s; }
+.ball:active { transform: scale(.94); }
+.gold { background-image: url(/images/advent_gold.png); width: calc(140 * var(--u)); height: calc(168 * var(--u)); }
+.pearl { background-image: url(/images/advent_pearl.png); width: calc(140 * var(--u)); height: calc(168 * var(--u)); }
+.today { background-image: url(/images/advent_today.png); width: calc(184 * var(--u)); height: calc(200 * var(--u));
+         animation: glow 2.4s ease-in-out infinite; }
+@keyframes glow { 50% { filter: brightness(1.06) drop-shadow(0 0 calc(8 * var(--u)) rgba(255, 220, 140, .8)); } }
+.n { position: absolute; left: 0; right: 0; text-align: center; font: 700 calc(48 * var(--u)) / 1 Lora, Georgia, serif; }
+.gold .n { top: calc(74 * var(--u)); color: #fff; text-shadow: 0 calc(2 * var(--u)) calc(3 * var(--u)) rgba(120, 70, 10, .45); }
+.gold .ck { position: absolute; left: calc(52 * var(--u)); top: calc(124 * var(--u)); width: calc(36 * var(--u)); height: calc(26 * var(--u)); }
+.pearl .n { top: calc(64 * var(--u)); color: var(--num); font-size: calc(46 * var(--u)); }
+.pearl.free .n { top: calc(80 * var(--u)); }
+.pearl .lk { position: absolute; left: calc(51 * var(--u)); top: calc(108 * var(--u)); width: calc(38 * var(--u)); height: calc(46 * var(--u));
+             background: url(/images/advent_lock.png) center / contain no-repeat; }
+.today .n { top: calc(68 * var(--u)); color: var(--brown); font-size: calc(60 * var(--u)); }
+.today .td { position: absolute; left: 0; right: 0; top: calc(130 * var(--u)); text-align: center; font: 800 calc(18 * var(--u)) Inter, sans-serif; }
+.gift { position: absolute; width: calc(46 * var(--u)); height: calc(52 * var(--u)); background: url(/images/advent_gift.png) center / contain no-repeat;
+        pointer-events: none; }
+.legend { left: 0; right: 0; top: calc(1612 * var(--u)); display: flex; justify-content: center; align-items: center; gap: calc(8 * var(--u));
+          font: 500 calc(24 * var(--u)) Inter, sans-serif; color: #2E1A12; }
+.legend span { display: flex; align-items: center; gap: calc(4 * var(--u)); margin: 0 calc(12 * var(--u)); }
+.pill { left: calc(114 * var(--u)); width: calc(538 * var(--u)); top: calc(1674 * var(--u)); height: calc(88 * var(--u)); border-radius: 99px;
+        border: calc(2.5 * var(--u)) solid #D4A852; background: linear-gradient(180deg, #FCEBC2 0%, #F4D58E 45%, #EAC06A 100%);
+        box-shadow: 0 calc(6 * var(--u)) calc(16 * var(--u)) rgba(170, 120, 40, .3), inset 0 calc(2 * var(--u)) 0 rgba(255, 255, 255, .7);
+        display: flex; align-items: center; justify-content: center; gap: calc(26 * var(--u)); font: italic 700 calc(40 * var(--u)) Lora, Georgia, serif;
+        color: #3A1A10; cursor: pointer; white-space: nowrap; }
+.pill svg { width: calc(46 * var(--u)); height: calc(46 * var(--u)); flex: none; }
+
+/* віконце знизу */
+.sheet { position: fixed; inset: 0; background: rgba(60, 30, 15, .35); display: none; align-items: flex-end; justify-content: center; z-index: 9; }
+.sheet.on { display: flex; }
+.win { width: min(100vw, 520px); max-height: 90vh; overflow: auto; background: linear-gradient(180deg, #FFF9F1, #FBEEDD);
+       border-radius: 26px 26px 0 0; padding: 20px 22px calc(24px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 30px rgba(120, 70, 30, .25);
+       position: relative; animation: up .25s ease-out; }
+@keyframes up { from { transform: translateY(40px); opacity: .4; } }
+.win .x { position: absolute; right: 14px; top: 10px; font-size: 28px; line-height: 1; color: #8A786E; background: none; border: 0; padding: 6px; }
+.win .k { font: italic 600 16px Lora, serif; color: #9C6B2E; }
+.win h2 { font: 700 23px/1.25 Lora, serif; margin: 4px 26px 12px 0; }
+.win .body p { font: 400 16px/1.5 Inter, sans-serif; color: #2E1A12; }
+.win .task { margin: 14px 0; padding: 13px 15px; border-radius: 16px; background: linear-gradient(145deg, #FCF3E1, #F3DFB5);
+             font: 400 15.5px/1.45 Inter, sans-serif; }
+.win .gbox { margin: 0 0 14px; padding: 13px 15px; border-radius: 16px; background: #FFFDF8; border: 1.5px dashed #D9B86E; }
+.win .gbox b { display: block; font: 700 16px Inter, sans-serif; margin-bottom: 4px; }
+.win .gbox small { display: block; color: #8A786E; font-size: 13px; margin-bottom: 8px; }
+.win .gbox button { display: block; width: 100%; margin-top: 7px; padding: 11px 12px; border-radius: 12px; border: 1px solid #E2CFAF;
+                    background: linear-gradient(180deg, #FFFCF5, #FBF0DA); font: 600 14.5px Inter, sans-serif; color: var(--brown); text-align: left; }
+.win .gbox button { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.win .gbox button .pr { white-space: nowrap; }
+.win .gbox button s { color: #A89383; font-weight: 400; margin-right: 5px; }
+.win textarea { width: 100%; min-height: 110px; resize: vertical; border: 1.5px solid #E6D3B5; border-radius: 16px; padding: 12px 14px;
+                font: 400 16px/1.45 Inter, sans-serif; color: #2E1A12; background: #FFFEFB; outline: none; }
+.win textarea:focus { border-color: #D4A852; }
+.win .priv { font-size: 13px; color: #8A786E; margin: 8px 2px 6px; }
+.win label.share { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; line-height: 1.35; color: #5A463C; margin: 2px 2px 14px; }
+.win label.share input { width: 20px; height: 20px; flex: none; accent-color: #C9984A; margin-top: 1px; }
+.win .go { width: 100%; border: 2px solid #D4A852; border-radius: 99px; padding: 14px; font: italic 700 20px Lora, serif; color: #3A1A10;
+           background: linear-gradient(180deg, #FCEBC2, #F4D58E 45%, #EAC06A); box-shadow: 0 5px 14px rgba(170, 120, 40, .3); }
+.win .go:disabled { opacity: .6; }
+.win .row { display: flex; gap: 8px; margin-top: 10px; }
+.win .row button { flex: 1; border: 1px solid #E2CFAF; background: #FFFCF7; border-radius: 99px; padding: 11px 6px; font: 500 14px Inter, sans-serif; color: var(--brown); }
+.win .note { text-align: center; color: #8A786E; font-size: 14px; margin: 6px 0 4px; }
+.toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px); background: rgba(62, 29, 18, .92); color: #fff;
+         padding: 11px 18px; border-radius: 99px; font: 500 14.5px Inter, sans-serif; opacity: 0; transition: .25s; z-index: 20;
+         max-width: 92vw; text-align: center; pointer-events: none; white-space: nowrap; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+.msg { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 15; padding: 30px; }
+.msg.on { display: flex; }
+.msg div { background: rgba(255, 252, 248, .96); border-radius: 22px; padding: 22px; text-align: center; font: 500 16px/1.45 Inter, sans-serif;
+           box-shadow: 0 6px 24px rgba(150, 100, 60, .25); }
+</style>
+</head>
+<body>
+<div class="page" id="pg">
+  <div class="a kicker" id="kicker"></div>
+  <div class="a title" id="title"></div>
+  <div class="a sub" id="sub"></div>
+  <div class="a card">
+    <div class="t"><span id="prog"></span><span id="cnt">0 з 31</span></div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="s" id="goal"></div>
+  </div>
+  <div class="a legend" id="legend"></div>
+  <div class="a pill" id="pill"><svg viewBox="0 0 48 48" fill="none" stroke="#3A1A10" stroke-width="3.4" stroke-linecap="round"><rect x="6" y="9" width="36" height="33" rx="6"/><path d="M6 19h36M16 5v8M32 5v8"/><g fill="#3A1A10" stroke="none"><circle cx="16" cy="27" r="2.4"/><circle cx="24" cy="27" r="2.4"/><circle cx="32" cy="27" r="2.4"/><circle cx="16" cy="35" r="2.4"/><circle cx="24" cy="35" r="2.4"/><circle cx="32" cy="35" r="2.4"/></g></svg><span id="pilltxt"></span></div>
+</div>
+<div class="sheet" id="sheet"><div class="win" id="win"></div></div>
+<div class="msg" id="msg"><div id="msgtxt"></div></div>
+<div class="toast" id="toast"></div>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor("#F6E3CF"); tg.setBackgroundColor("#F6E3CF"); } catch (e) {} }
+const INIT = tg ? tg.initData : "";
+const U = v => `calc(${v} * var(--u))`;
+const COLS = [132, 282, 430, 578, 725], CY = [578, 746, 908, 1069, 1229, 1390, 1546], LINES = [480, 655, 818, 980, 1140, 1302, 1462];
+const CHECK = '<svg viewBox="0 0 36 26"><path d="M4 13l9 9L32 4" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+let S = null, seen = {}, busy = false;
+
+function $(id) { return document.getElementById(id); }
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function fmt(s, o) { return String(s || "").replace(/\{(\w+)\}/g, (m, k) => (o[k] != null ? o[k] : m)); }
+function toast(t) { const x = $("toast"); x.textContent = t; x.classList.add("on"); clearTimeout(x._t); x._t = setTimeout(() => x.classList.remove("on"), 2200); }
+function message(t) { $("msgtxt").textContent = t; $("msg").classList.add("on"); }
+function post(action, extra) {
+  return fetch("/advent/" + action, { method: "POST", body: JSON.stringify(Object.assign({ init: INIT }, extra || {})) })
+    .then(r => r.json());
+}
+function closeApp() { if (tg) setTimeout(() => tg.close(), 350); }
+
+function render() {
+  const T = S.texts;
+  $("kicker").textContent = T.kicker; $("title").textContent = T.title; $("sub").textContent = T.sub;
+  $("prog").textContent = T.progress; $("cnt").textContent = S.done + " з 31";
+  $("bar").style.width = Math.round(S.done / 31 * 100) + "%";
+  const goal = $("goal"); goal.textContent = "";
+  if (S.done >= S.need) goal.textContent = T.goal_ok;
+  else {
+    goal.append(T.goal + " ", el("br"), el("b", "", T.goal_prize), " ");
+    const g = el("span", "ic"); g.style.cssText = `width:${U(34)};height:${U(38)};background-image:url(/images/advent_gift.png)`; goal.append(g);
+  }
+  const lg = $("legend"); lg.textContent = "";
+  const icons = [CHECK.replace(/#fff/g, "#2E1A12").replace("<svg", `<svg style="width:${U(26)};height:${U(20)}"`),
+                 `<span class="ic" style="width:${U(38)};height:${U(46)};background-image:url(/images/advent_lock.png)"></span>`,
+                 `<span class="ic" style="width:${U(44)};height:${U(50)};background-image:url(/images/advent_gift.png)"></span>`];
+  T.legend.forEach((t, i) => { const s = el("span"); s.innerHTML = icons[i]; s.append(t); lg.append(s); });
+  const pg = $("pg");
+  pg.querySelectorAll(".dyn").forEach(e => e.remove());
+  LINES.forEach(y => { const l = el("div", "a gline dyn"); l.style.top = U(y); pg.append(l); });
+  S.days.forEach(d => {
+    const r = Math.floor((d.n - 1) / 5), cx = COLS[(d.n - 1) % 5], cy = CY[r];
+    const b = el("button", "a ball dyn");
+    b.setAttribute("aria-label", "Віконце " + d.n);
+    const isToday = S.phase === "live" && d.n === S.today && !d.done;
+    if (d.done) {
+      b.classList.add("gold"); b.style.left = U(cx - 70); b.style.top = U(cy - 100);
+      b.innerHTML = `<span class="n">${d.n}</span>` + CHECK.replace("<svg", '<svg class="ck"');
+    } else if (isToday) {
+      b.classList.add("today"); b.style.left = U(cx - 92); b.style.top = U(cy - 108);
+      b.append(el("span", "n", d.n), el("span", "td", T.today));
+    } else {
+      b.classList.add("pearl"); if (d.open) b.classList.add("free"); b.style.left = U(cx - 70); b.style.top = U(cy - 100);
+      b.append(el("span", "n", d.n)); if (!d.open) b.append(el("span", "lk"));
+    }
+    b.onclick = () => d.open ? openWin(d.n) : toast(fmt(T.locked, { n: d.n, date: d.date }));
+    pg.append(b);
+    if (d.gift) { const g = el("div", "gift dyn"); g.style.left = U(cx + (isToday ? 40 : 26)); g.style.top = U(cy + (isToday ? 34 : 18)); pg.append(g); }
+  });
+  const pill = $("pilltxt");
+  if (S.phase === "live" && S.today) pill.textContent = `Віконце ${S.today} · ${S.days[S.today - 1].date.replace(/^0/, "").replace(/\.12$/, " грудня")}`;
+  else if (S.phase === "over") pill.textContent = T.over_pill;
+  else pill.textContent = fmt(T.soon_pill, { left: S.left });
+  $("pill").onclick = () => {
+    if (S.phase === "live" && S.today) openWin(S.today);
+    else if (S.phase !== "over") toast(fmt(T.locked, { n: 1, date: S.days[0].date }));
+  };
+}
+
+function openWin(n) {
+  const T = S.texts, d = S.days[n - 1];
+  if (!d || !d.open) return;
+  const w = $("win"); w.textContent = "";
+  const x = el("button", "x", "×"); x.onclick = closeWin; w.append(x);
+  w.append(el("div", "k", `Віконце ${n} · ${d.date.replace(/^0/, "").replace(/\.12$/, " грудня")}`), el("h2", "", d.title));
+  const body = el("div", "body"); String(d.text).split("\n").forEach(t => body.append(el("p", "", t))); w.append(body);
+  const task = el("div", "task"); task.append(el("b", "", "✍️ " + T.task + " "), d.task); w.append(task);
+  if (d.gift_info) w.append(giftBox(n, d.gift_info));
+  const ta = el("textarea"); ta.placeholder = T.answer_ph; ta.value = d.answer || ""; ta.maxLength = 3000; w.append(ta);
+  w.append(el("div", "priv", "🔒 " + T.privacy));
+  const lab = el("label", "share"); const cb = el("input"); cb.type = "checkbox"; cb.checked = !!d.share;
+  lab.append(cb, el("span", "", T.share)); w.append(lab);
+  if (S.can_done) {
+    const go = el("button", "go", d.done ? T.save_btn : T.done_btn);
+    go.onclick = () => {
+      if (busy) return; busy = true; go.disabled = true;
+      post("done", { day: n, answer: ta.value, share: cb.checked }).then(r => {
+        busy = false; go.disabled = false;
+        if (!r || !r.ok) { toast(T.error); return; }
+        const was = d.done; S = r; render(); closeWin();
+        toast(was ? T.saved_toast : fmt(T.done_toast, { n }));
+        if (tg && tg.HapticFeedback) try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {}
+      }).catch(() => { busy = false; go.disabled = false; toast(T.error); });
+    };
+    w.append(go);
+  } else {
+    w.append(el("div", "note", T.over_note));
+  }
+  const row = el("div", "row");
+  const ask = el("button", "", T.ask_btn); ask.onclick = () => post("ask", { day: n }).then(closeApp).catch(() => toast(T.error));
+  const back = el("button", "", T.back_btn); back.onclick = closeWin;
+  row.append(ask, back); w.append(row);
+  $("sheet").classList.add("on"); document.body.classList.add("lock"); w.scrollTop = 0;
+  if (!seen[n]) { seen[n] = 1; post("seen", { day: n }).catch(() => {}); }
+}
+
+function giftBox(n, g) {
+  const T = S.texts, box = el("div", "gbox");
+  box.append(el("b", "", fmt(g.options.length > 1 ? T.gift_head : T.gift_one, { pct: g.pct })));
+  const taken = g.options.find(o => o.key === g.taken);
+  if (taken) {
+    const b = el("button", "", fmt(T.gift_taken, { name: taken.name }));
+    b.onclick = () => post("gift", { day: n, key: taken.key }).then(closeApp);
+    box.append(b);
+    if (g.over) b.disabled = true;
+    return box;
+  }
+  if (g.over) { box.append(el("small", "", T.gift_over)); return box; }
+  box.append(el("small", "", fmt(T.gift_until, { until: g.until })));
+  g.options.forEach(o => {
+    const b = el("button"), pr = el("span", "pr");
+    b.append(el("span", "", o.name), pr);
+    if (o.old) { pr.append(el("s", "", o.old + " грн"), el("b", "", o.new + " грн")); }
+    else pr.append(el("b", "", "−" + g.pct + "%"));
+    b.onclick = () => post("gift", { day: n, key: o.key }).then(closeApp).catch(() => toast(T.error));
+    box.append(b);
+  });
+  return box;
+}
+
+function closeWin() { $("sheet").classList.remove("on"); document.body.classList.remove("lock"); }
+$("sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeWin(); });
+
+if (!INIT) {
+  message("Календар відкривається в Telegram, з кнопки «🎄 Адвент-календар» в агенті 🌿");
+} else {
+  post("state").then(r => {
+    if (r && r.need_join) { message(r.texts.need_join); return; }
+    if (!r || !r.ok) { message("Не вдалося відкрити календар. Спробуйте ще раз 🙏"); return; }
+    S = r; render();
+    const want = parseInt(new URLSearchParams(location.search).get("d") || "0", 10);
+    if (want && S.days[want - 1] && S.days[want - 1].open) openWin(want);
+  }).catch(() => message("Не вдалося відкрити календар. Перевірте інтернет і спробуйте ще раз 🙏"));
+}
+</script>
+</body>
+</html>

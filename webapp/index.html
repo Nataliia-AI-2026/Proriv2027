@@ -68,6 +68,17 @@
   .rv-card .qm { font-family: var(--serif); font-size: 44px; line-height: .6; color: var(--champ); display: block; height: 18px; }
   .rv-card p { margin: 8px 0 10px; white-space: pre-line; font-family: var(--serif); font-style: italic; font-size: 16.5px; }
   .rv-card span { color: var(--taupe); font-size: 13px; }
+  .faq { background: var(--white); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; }
+  .faq details { border-bottom: 1px solid var(--line); }
+  .faq details:last-child { border-bottom: 0; }
+  .faq summary { list-style: none; cursor: pointer; padding: 14px 44px 14px 16px; position: relative;
+                 font-family: var(--serif); font-weight: 600; font-size: 16.5px; }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after { content: "+"; position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+                        width: 24px; height: 24px; border-radius: 50%; background: var(--sand); color: #9C7A3C;
+                        display: grid; place-items: center; font-family: inherit; font-size: 18px; line-height: 1; }
+  .faq details[open] summary::after { content: "−"; }
+  .faq details p { margin: 0; padding: 0 16px 14px; white-space: pre-line; font-size: 15px; color: var(--choc); }
   .swipe { text-align: center; color: var(--taupe); font-size: 12.5px; margin-top: 2px; }
   .sale { position: relative; overflow: hidden; display: flex; align-items: center; gap: 6px; margin: 22px 0 0;
           padding: 10px 26px 10px 6px; border-radius: 22px; z-index: 1;
@@ -257,6 +268,14 @@ function render(d) {
       const c = el("div", "rv-card"); c.append(el("span", "qm", "“"), el("p", "", txt), el("span", "", who)); box.append(c);
     });
     root.append(box); if (a.swipe_hint) root.append(el("p", "swipe", a.swipe_hint));
+  }
+  if (a.faq && a.faq.length) {
+    root.append(el("h2", "", a.faq_title));
+    const box = el("div", "faq");
+    a.faq.forEach(([q, ans]) => {
+      const d = el("details"); d.append(el("summary", "", q), el("p", "", ans)); box.append(d);
+    });
+    root.append(box);
   }
   if (a.start_hint) root.append(el("p", "hint", a.start_hint));
 

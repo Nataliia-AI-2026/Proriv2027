@@ -19,6 +19,7 @@ from telegram.error import Forbidden, NetworkError, TimedOut
 from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
+import advent
 import config
 import db
 import quiz
@@ -64,9 +65,10 @@ def product(key):
     return name, text
 
 
-def pay_amount(key):
-    """Сума до оплати: під час акції акційна."""
-    return (T.PAY_AMOUNT_SALE if sale_on() else T.PAY_AMOUNT).get(key, T.PAY_AMOUNT.get(key, ""))
+def pay_amount(key, uid=0):
+    """Сума до оплати: подарунок адвент-календаря, під час акції акційна, інакше звичайна."""
+    return (advent.pay_amount(key, uid) or
+            (T.PAY_AMOUNT_SALE if sale_on() else T.PAY_AMOUNT).get(key, T.PAY_AMOUNT.get(key, "")))
 
 
 # Кнопки нижнього меню, які відкривають продукт (звичайні, акційні і старі назви)
@@ -76,17 +78,18 @@ MENU_PRODUCT_BTNS = {T.BTN_PUTIVNYK: "putivnyk", T.BTN_PRORYV: "proryv",
 
 def menu_buttons():
     b = [main_button(), T.BTN_MAIN, T.BTN_GIFT, T.BTN_QUIZ, T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
-         T.BTN_APP, T.BTN_APP_OLD,
+         T.BTN_APP, T.BTN_APP_OLD, T.ADVENT_BTN, T.ADVENT_BTN_SOON,
          *MENU_PRODUCT_BTNS]
     return set(b)
 
 
-def menu_version():
+def menu_version(uid=0):
     """Версія меню: з міні-застосунком, щойно в Railway є адреса сторінки, інакше стара.
-    Під час акції інша версія, щоб після SALE_UNTIL люди самі отримали меню без кнопки Прориву."""
+    Під час акції інша версія, щоб після SALE_UNTIL люди самі отримали меню без кнопки Прориву.
+    Так само з адвент-календарем: кнопка з'являється з анонсу і зникає 1 січня."""
     if not webapp.app_url():
         return T.MENU_VERSION_NOAPP
-    return T.MENU_VERSION + ("-sale" if sale_on() else "")
+    return T.MENU_VERSION + ("-sale" if sale_on() else "") + advent.menu_tag(uid)
 
 
 def kb_bottom(uid):
@@ -96,22 +99,26 @@ def kb_bottom(uid):
     url = webapp.app_url()
     if url:  # міні-застосунок (другий рядок) замість «Мої продукти» і «Контакти»
         # Путівник лише в застосунку; Прорив у меню тільки під час акції (по SALE_UNTIL), потім зникає сам
-        rows = [[main_button(), T.BTN_GIFT], [KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))],
+        adv = advent.menu_label(uid)
+        rows = [[main_button(), T.BTN_GIFT], *([[adv]] if adv else []), [KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))],
                 *([[T.BTN_PRORYV_SALE]] if sale else []), [T.BTN_QUIZ, T.BTN_ASK], [T.BTN_CABINET]]
     else:
         rows = [[main_button(), T.BTN_GIFT], *products, [T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK],
                 [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
-    db.kv(f"menu:{uid}", menu_version())  # ця людина отримує свіже меню
+    db.kv(f"menu:{uid}", menu_version(uid))  # ця людина отримує свіже меню
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
 async def refresh_menu(bot, chat_id, uid):
     """Якщо в людини старе нижнє меню (до останньої зміни кнопок), надсилаємо нове."""
-    if db.kv(f"menu:{uid}") != menu_version():
+    old = db.kv(f"menu:{uid}") or ""
+    if old != menu_version(uid):
+        # з'явився адвент-календар: окреме повідомлення про нього
+        text = T.ADVENT_MENU_UPDATED if advent.menu_tag(uid) and advent.menu_tag(uid) not in old else T.MENU_UPDATED
         try:
-            await bot.send_message(chat_id, T.MENU_UPDATED, reply_markup=kb_bottom(uid))
+            await bot.send_message(chat_id, text, reply_markup=kb_bottom(uid))
         except Exception as e:
             log.warning("menu refresh %s: %s", uid, e)
 
@@ -424,6 +431,8 @@ async def after_start(context, chat_id, uid, src, is_new):
         await ask_start(chat_id, context, uid)
     elif src == "about":
         await show_about(chat_id, context, uid)
+    elif src == "advent":
+        await advent.entry(context.bot, chat_id, uid)
 
 
 async def send_gift(bot, chat_id, uid):
@@ -657,7 +666,7 @@ async def show_admin(chat_id, context, edit_msg=None):
     sources = "\n".join(f"• {esc(s if s not in ('', 'direct') else 'напряму')}: {n}" for s, n in src) or "• поки нікого"
     text = T.ADMIN_MENU.format(total=total, week=week, sources=sources)
     rows = [[(T.BTN_BROADCAST, "bc"), (T.BTN_REPORT, "report")], [(T.BTN_PEOPLE, "people"), (T.BTN_LINKS, "links")],
-            [(T.BTN_IDEAS, "ideas"), (T.BTN_STATS, "adm")]]
+            [(T.BTN_IDEAS, "ideas"), (T.BTN_STATS, "adm")], [(T.BTN_ADVENT_ADMIN, "adv:a")]]
     if launch:
         rows = launch.admin_rows() + rows
     markup = kb(rows)
@@ -766,11 +775,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     kind, _, arg = data.partition(":")
     # без обов'язкової підписки: оплата, документи, тести і кнопки продуктів/запису під описами
-    buy_cb = kind in ("pay", "paid", "doc", "qz", "prod", "write", "inv")
+    buy_cb = kind in ("pay", "paid", "doc", "qz", "prod", "write", "inv", "adv")
     if not config.is_admin(uid) and not buy_cb and not await gate_ok(context.bot, chat_id, uid):
         return
     if launch and data.startswith("lc:"):
         await launch.on_callback(update, context, data)
+    elif data.startswith("adv:"):
+        await advent.on_callback(update, context, data)
     elif data == "home":
         state(uid, "")
         await context.bot.send_message(chat_id, T.MENU_HINT, reply_markup=kb_bottom(uid))
@@ -795,7 +806,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         key = data[4:]
         db.log_ev(uid, "pay", key)
         await context.bot.send_message(
-            chat_id, T.PAY_TEXT.format(title=T.PAY_TITLE[key], amount=pay_amount(key)), parse_mode=HTML,
+            chat_id, T.PAY_TEXT.format(title=T.PAY_TITLE[key], amount=pay_amount(key, uid)), parse_mode=HTML,
             disable_web_page_preview=True,
             reply_markup=kb([[(T.BTN_PAID, f"paid:{key}")], [(T.BTN_OFFER, "doc:offer"), (T.BTN_PRIVACY, "doc:privacy")],
                              [(T.BTN_BACK, f"prod:{key}"), (T.BTN_HOME, "home")]]))
@@ -906,6 +917,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_cabinet(chat_id, context, uid)
         elif text == T.BTN_CONTACTS:
             await show_contacts(chat_id, context, uid)
+        elif advent.is_btn(text):
+            await advent.entry(context.bot, chat_id, uid)
         elif text == T.BTN_ADMIN and config.is_admin(uid):
             await show_admin(chat_id, context)
         return
@@ -955,7 +968,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.kv(f"paid_sent:{uid}", key)
         if first:
             db.log_ev(uid, "paid", key)
-        head = T.ADMIN_PAID.format(title=esc(T.PAY_TITLE[key]), amount=esc(pay_amount(key)), who=who(u), uid=uid,
+        head = T.ADMIN_PAID.format(title=esc(T.PAY_TITLE[key]), amount=esc(pay_amount(key, uid)), who=who(u), uid=uid,
                                    text=esc(text or msg.caption or "(квитанція нижче)"))
         for a in config.ADMIN_IDS:
             try:
@@ -978,7 +991,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.log_ev(uid, "question", topic)
         head = T.ADMIN_QUESTION.format(who=who(u), uid=uid, text=esc(text or msg.caption or "(голосове чи файл нижче)"))
         if topic:
-            title = (launch.topic_title(topic) if launch else "") or quiz.topic_title(topic)
+            title = (launch.topic_title(topic) if launch else "") or quiz.topic_title(topic) or advent.topic_title(topic)
             title = title or T.PRODUCTS.get(topic, (topic,))[0]
             head = f"Тема: <b>{esc(title)}</b>\n" + head
         for a in config.ADMIN_IDS:
@@ -1143,6 +1156,9 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app: Application):
     db.init()
+    advent.setup()
+    advent.bind(loop=asyncio.get_running_loop(), bot=app.bot, is_member=is_member, kb_bottom=kb_bottom,
+                ask_start=ask_start, notify_admins=notify_admins, set_blocked=db.set_blocked)
     if launch:
         launch.setup()
     await app.bot.set_my_commands([BotCommand("start", "Почати"), BotCommand("menu", "Меню")])
@@ -1161,7 +1177,7 @@ async def post_init(app: Application):
                                            else MenuButtonCommands())
     except Exception as e:
         log.warning("menu button: %s", e)
-    webapp.start(lambda: app_data(bot_name), lambda uid: db.log_ev(uid, "app_open"))
+    webapp.start(lambda: app_data(bot_name), lambda uid: db.log_ev(uid, "app_open"), advent.api)
     # «Агента оновлено»: один раз на кожну нову версію з texts.VERSION
     if config.ADMIN_IDS and db.kv("version") != T.VERSION:  # без ADMIN_ID не позначаємо, щоб повідомлення не загубилось
         db.kv("version", T.VERSION)
@@ -1187,6 +1203,7 @@ def main():
     app.job_queue.run_repeating(ideas_job, interval=300, first=90)   # ідеї о 19:00, один раз на день
     app.job_queue.run_repeating(group_welcome_cleanup_job, interval=600, first=120)  # прибирає привітання в групі
     app.job_queue.run_repeating(remind_job, interval=600, first=150)
+    app.job_queue.run_repeating(advent.daily_job, interval=120, first=45)  # адвент: віконце о 8:00, розіграш, підсумки
     app.job_queue.run_repeating(sale_end_job, interval=600, first=180)  # нагадування після кінця акції  # нагадування про групу через добу
     app.add_error_handler(on_error)
     log.info("Агент запускається")

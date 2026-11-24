@@ -16,6 +16,7 @@ import config
 log = logging.getLogger("webapp")
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "webapp", "index.html")
+ADVENT_PAGE = os.path.join(HERE, "webapp", "advent.html")   # адвент-календар (advent.py)
 IMG_DIR = os.path.join(HERE, "images")
 IMG_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
@@ -43,8 +44,9 @@ def user_from_init_data(init_data):
     return 0
 
 
-def start(get_data, on_open):
-    """get_data() → словник для сторінки; on_open(uid) → записати, що людина відкрила застосунок."""
+def start(get_data, on_open, advent_api=None):
+    """get_data() → словник для сторінки; on_open(uid) → записати, що людина відкрила застосунок;
+    advent_api(path, body) → (код, словник) для запитів сторінки адвент-календаря."""
     port = int(os.environ.get("PORT", "8080"))
 
     class Handler(BaseHTTPRequestHandler):
@@ -69,6 +71,9 @@ def start(get_data, on_open):
                 if path in ("/", "/index.html"):
                     with open(PAGE, "rb") as f:
                         return self._send(200, f.read(), "text/html; charset=utf-8")
+                if path in ("/advent", "/advent/") and os.path.isfile(ADVENT_PAGE):
+                    with open(ADVENT_PAGE, "rb") as f:
+                        return self._send(200, f.read(), "text/html; charset=utf-8")
                 if path == "/data.json":
                     body = json.dumps(get_data(), ensure_ascii=False).encode()
                     return self._send(200, body, "application/json; charset=utf-8")
@@ -85,7 +90,16 @@ def start(get_data, on_open):
                 self._send(500, b"error", "text/plain")
 
         def do_POST(self):
-            if urlparse(self.path).path != "/open":
+            path = urlparse(self.path).path
+            if path.startswith("/advent/") and advent_api:
+                try:
+                    n = min(int(self.headers.get("Content-Length") or 0), 65536)
+                    code, data = advent_api(path, self.rfile.read(n).decode("utf-8", "replace"))
+                except Exception as e:
+                    log.warning("advent %s: %s", path, e)
+                    code, data = 500, {"ok": False}
+                return self._send(code, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8")
+            if path != "/open":
                 return self._send(404, b"not found", "text/plain")
             try:
                 n = min(int(self.headers.get("Content-Length") or 0), 8192)

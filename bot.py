@@ -72,7 +72,7 @@ MENU_PRODUCT_BTNS = {T.BTN_PUTIVNYK: "putivnyk", T.BTN_PRORYV: "proryv",
 
 
 def menu_buttons():
-    b = [main_button(), T.BTN_MAIN, T.BTN_PRODUCTS, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
+    b = [main_button(), T.BTN_MAIN, T.BTN_GIFT, T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
          *MENU_PRODUCT_BTNS]
     return set(b)
 
@@ -80,7 +80,7 @@ def menu_buttons():
 def kb_bottom(uid):
     """Нижнє меню: широка головна кнопка зверху, далі по 2 в ряд. Власниці ще «Керування»."""
     sale = sale_on()
-    rows = [[main_button()], [T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK],
+    rows = [[main_button(), T.BTN_GIFT], [T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK],
             [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
@@ -618,7 +618,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await launch.show_card(context.bot, chat_id, uid)
         elif text == T.BTN_MAIN:
             await show_about(chat_id, context, uid)
-        elif text == T.BTN_PRODUCTS:
+        elif text == T.BTN_GIFT:
+            db.log_ev(uid, "gift_menu")
+            await context.bot.send_message(chat_id, T.GIFT_MENU_TEXT, parse_mode=HTML,
+                                           reply_markup=kb([[(T.GIFT_MENU_BTN, T.GIFT_LINK)],
+                                                            [(T.GIFT_MENU_NEXT, "prod:diag")], [(T.BTN_HOME, "home")]]))
+        elif text in (T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD):
             await show_products(chat_id, context, uid=uid)
         elif text in MENU_PRODUCT_BTNS:
             key = MENU_PRODUCT_BTNS[text]

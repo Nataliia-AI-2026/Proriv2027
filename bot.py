@@ -255,6 +255,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if src:
         db.add_source(u.id, src)
     door = door_for(src)
+    if src in T.BUY_GREET or (door and door.get("buy")):
+        # прийшла купити: одразу продукт з «Оплатити», без підписки і без подарунка, щоб не відволікати
+        if door:
+            rows = [[b] for b in door["buttons"]] + [[(T.BTN_HOME, "home")]]
+            await context.bot.send_message(chat_id, door["text"].format(name=esc(u.first_name)), parse_mode=HTML,
+                                           reply_markup=kb(rows), disable_web_page_preview=True)
+            await context.bot.send_message(chat_id, T.DOOR_MENU_HINT, reply_markup=kb_bottom(u.id))
+        else:
+            await context.bot.send_message(chat_id, T.BUY_GREET[src].format(name=esc(u.first_name)), parse_mode=HTML,
+                                           reply_markup=kb_bottom(u.id))
+            db.log_ev(u.id, "product", src)
+            await show_product(chat_id, context, src)
+        if is_new and not config.is_admin(u.id):
+            total, _, _ = db.stats()
+            await notify_admins(context.bot, T.ADMIN_NEW_USER.format(who=who(u), src=esc(src), total=total))
+        return
     if door:  # окреме привітання для цього входу
         rows = [[b] for b in door["buttons"]] + [[(T.BTN_HOME, "home")]]
         await context.bot.send_message(chat_id, door["text"].format(name=esc(u.first_name)), parse_mode=HTML,
@@ -428,6 +444,8 @@ async def show_product(chat_id, context, key, edit_msg=None):
     rows = [[(T.BTN_WRITE_ME, f"write:{key}")], [(T.BTN_BACK, "products"), (T.BTN_HOME, "home")]]
     if key in T.PAY_AMOUNT:
         rows.insert(0, [(T.BTN_PAY, f"pay:{key}")])
+    if key in T.BUY_PRODUCTS and T.CHANNEL_LINK:
+        rows.insert(-1, [(T.BTN_GROUP, T.CHANNEL_LINK)])
     markup = kb(rows)
     media = T.PRODUCT_PHOTOS.get(key)
     if edit_msg and edit_msg.text and not media_path(media):
@@ -563,7 +581,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await context.bot.send_message(chat_id, T.GATE_NOT_YET)
         return
-    if not config.is_admin(uid) and not await gate_ok(context.bot, chat_id, uid):
+    kind, _, arg = data.partition(":")
+    buy_cb = kind in ("pay", "paid", "doc") or (kind in ("prod", "write") and arg in T.BUY_PRODUCTS)
+    if not config.is_admin(uid) and not buy_cb and not await gate_ok(context.bot, chat_id, uid):
         return
     if launch and data.startswith("lc:"):
         await launch.on_callback(update, context, data)
@@ -657,7 +677,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1) Кнопки нижнього меню завжди першими: людина не «застрягає» в питанні чи розсилці
     if text in menu_buttons():
         state(uid, "")
-        if not await gate_ok(context.bot, chat_id, uid):
+        buy_btn = MENU_PRODUCT_BTNS.get(text) in T.BUY_PRODUCTS  # Путівник і Прорив у меню без підписки
+        if not buy_btn and not await gate_ok(context.bot, chat_id, uid):
             return
         if launch and text == T.BTN_LAUNCH:
             await launch.show_card(context.bot, chat_id, uid)

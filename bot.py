@@ -989,11 +989,31 @@ def app_data(bot_name=""):
         return "/images/" + os.path.basename(rel) if rel and media_path(rel) else ""
     app = dict(T.APP, photo=img(T.APP.get("photo")))
     app["docs"] = [list(d) for d in T.APP.get("docs", [])]
-    cards = [dict(c, photo=img(c.get("photo") or T.PRODUCT_PHOTOS.get(c["key"], "")), btn=list(c["btn"]),
-                  more=(f"prod:{c['key']}" if c["key"] in T.PRODUCTS and not c["btn"][1].startswith("prod:") else ""))
-             for c in T.APP_CARDS]
+    app["facts"] = [list(f) for f in T.APP.get("facts", [])]
+    app["decor"] = {k: img(v) for k, v in T.APP.get("decor", {}).items()}
+    cards = []
+    for c in T.APP_CARDS:
+        full = app_full_text(c["key"]) if c.get("full") else ""
+        more = f"prod:{c['key']}" if c["key"] in T.PRODUCTS and not c["btn"][1].startswith("prod:") and not full else ""
+        cards.append(dict(c, photo=img(c.get("photo") or T.PRODUCT_PHOTOS.get(c["key"], "")), btn=list(c["btn"]),
+                          more=more, full=full))
     return {"app": app, "sale": sale_on(), "cards": cards, "links": [list(x) for x in T.APP_LINKS],
             "channel": T.CHANNEL_LINK, "bot": bot_name}
+
+
+def app_full_text(key):
+    """Повний опис продукту для «Читати більше» у застосунку: без заголовка і без «натисніть «Написати мені»»,
+    кожне речення з нового рядка. Лишаємо тільки прості теги (жирний, курсив, цитата)."""
+    if key not in T.PRODUCTS:
+        return ""
+    lines = product(key)[1].split("\n")[1:]  # перший рядок = заголовок, він уже є на картці
+    cut = next((i for i, ln in enumerate(lines) if ln.startswith("Щоб записатися") or ln.startswith("Щоб замовити")
+                or ln.startswith("Щоб приєднатися")), len(lines))
+    text = "\n".join(lines[:cut]).strip()
+    text = re.sub(r"<blockquote[^>]*>", "<blockquote>", text)
+    text = re.sub(r"</?(?!(?:b|i|s|u|blockquote)>)[a-zA-Z-]+[^>]*>", "", text)
+    text = text.replace("30 листопада", "30\u00a0листопада").replace("</blockquote>\n", "</blockquote>")
+    return re.sub(r"(?<=[.!?…])[ \t]+(?=[А-ЯІЇЄҐA-Z«])", "\n", text)
 
 
 async def on_app_action(context, chat_id, uid, data):

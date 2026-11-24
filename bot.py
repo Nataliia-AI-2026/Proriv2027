@@ -4,6 +4,7 @@
 Додаток продажів (launch.py + wfp.py + texts_launch.py) підключається сам, якщо ці файли є в папці."""
 import asyncio
 import html
+import json
 import re
 import logging
 import os
@@ -344,6 +345,50 @@ async def dzherela(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     rows = "\n".join(T.SOURCES_ROW.format(word=esc(w), today=a, week=b, total=c) for w, (a, b, c) in st.items())
     await update.message.reply_text(T.SOURCES.format(rows=rows), parse_mode=HTML)
+
+
+async def on_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Нова учасниця в групі власниці: коротке привітання з кнопкою подарунка (прибирається через кілька годин)."""
+    cm = update.chat_member
+    if not cm or str(cm.chat.id) != (db.kv("channel_id") or "") or cm.chat.type not in ("group", "supergroup"):
+        return
+    was = cm.old_chat_member.status
+    now = cm.new_chat_member.status
+    u = cm.new_chat_member.user
+    if u.is_bot or config.is_admin(u.id) or was not in ("left", "kicked") or now not in ("member", "restricted"):
+        return
+    last = db.kv(f"gw:{u.id}") or ""
+    if last.isdigit() and time.time() - int(last) < 7 * 86400:  # не вітати ту саму людину частіше, ніж раз на тиждень
+        return
+    db.kv(f"gw:{u.id}", str(int(time.time())))
+    name = f'<a href="tg://user?id={u.id}">{esc(u.first_name)}</a>'
+    try:
+        m = await context.bot.send_message(cm.chat.id, T.GROUP_WELCOME.format(name=name), parse_mode=HTML,
+                                           reply_markup=kb([[(T.GROUP_WELCOME_BTN, T.GROUP_WELCOME_LINK)]]))
+    except Exception as e:
+        log.warning("group welcome: %s", e)
+        return
+    if T.GROUP_WELCOME_DELETE_HOURS:
+        todo = json.loads(db.kv("gw_delete") or "[]")
+        todo.append([cm.chat.id, m.message_id, int(time.time() + T.GROUP_WELCOME_DELETE_HOURS * 3600)])
+        db.kv("gw_delete", json.dumps(todo))
+
+
+async def group_welcome_cleanup_job(context):
+    """Прибирає старі привітання з групи (список у базі, тож переживає перезапуск)."""
+    todo = json.loads(db.kv("gw_delete") or "[]")
+    if not todo:
+        return
+    now, keep = time.time(), []
+    for chat, mid, at in todo:
+        if at > now:
+            keep.append([chat, mid, at])
+            continue
+        try:
+            await context.bot.delete_message(chat, mid)
+        except Exception as e:
+            log.warning("group welcome delete: %s", e)
+    db.kv("gw_delete", json.dumps(keep))
 
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -841,11 +886,13 @@ def main():
     app.add_handler(CommandHandler("dzherela", dzherela))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(ChatMemberHandler(on_group_member, ChatMemberHandler.CHAT_MEMBER))
     if launch:
         launch.add_handlers(app)  # /grupa і задачі продажів за розкладом
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, on_message))
     app.job_queue.run_repeating(report_job, interval=600, first=60)  # звіт о 9:00, один раз на день
     app.job_queue.run_repeating(ideas_job, interval=300, first=90)   # ідеї о 19:00, один раз на день
+    app.job_queue.run_repeating(group_welcome_cleanup_job, interval=600, first=120)  # прибирає привітання в групі
     app.add_error_handler(on_error)
     log.info("Агент запускається")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

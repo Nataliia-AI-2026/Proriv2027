@@ -227,14 +227,42 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== старт і меню ==================
 
+WORD_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def start_word(args):
+    """Слово з посилання ?start=СЛОВО; неправильне (кирилиця, пробіли, задовге) = порожньо."""
+    w = args[0] if args else ""
+    return w if WORD_RE.fullmatch(w) else ""
+
+
+def door_for(word):
+    """Двері для слова або None (невідоме, зайняте чи акція вже скінчилась)."""
+    d = T.DOORS.get(word)
+    if not d or word in T.DOOR_RESERVED or (d.get("sale") and not sale_on()):
+        return None
+    return d
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     chat_id = update.effective_chat.id
-    src = (context.args[0] if context.args else "")[:40]
+    src = start_word(context.args)
     is_new = db.touch_user(u.id, u.full_name, u.username or "", src)
     state(u.id, "")
     db.log_ev(u.id, "start", src)
-    if is_new:
+    if src:
+        db.add_source(u.id, src)
+    door = door_for(src)
+    if door:  # окреме привітання для цього входу
+        rows = [[b] for b in door["buttons"]] + [[(T.BTN_HOME, "home")]]
+        await context.bot.send_message(chat_id, door["text"].format(name=esc(u.first_name)), parse_mode=HTML,
+                                       reply_markup=kb(rows), disable_web_page_preview=True)
+        await context.bot.send_message(chat_id, T.DOOR_MENU_HINT, reply_markup=kb_bottom(u.id))
+        if is_new and not config.is_admin(u.id):
+            total, _, _ = db.stats()
+            await notify_admins(context.bot, T.ADMIN_NEW_USER.format(who=who(u), src=esc(src), total=total))
+    elif is_new:
         await send(context.bot, chat_id, T.WELCOME.format(name=esc(u.first_name), owner=T.OWNER_ROD),
                    kb_bottom(u.id), T.PHOTOS.get("welcome"))
         total, _, _ = db.stats()
@@ -250,7 +278,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def after_start(context, chat_id, uid, src, is_new):
     """Що робити після старту (і після підписки на канал): подарунок новим і розділ за міткою ?start=..."""
-    if (is_new or src == "gift") and (T.GIFT_FILE or T.GIFT_LINK):
+    if (is_new or src in T.GIFT_WORDS) and (T.GIFT_FILE or T.GIFT_LINK):
         await send_gift(context.bot, chat_id, uid)
     # Мітка ?start=... може одразу відкривати розділ: ?start=p1 → продукт p1, ?start=ask → питання, ?start=about
     if launch and await launch.on_start(context, chat_id, uid, src):
@@ -303,6 +331,19 @@ async def send_doc(bot, chat_id, which):
     if T.CHANNEL_LINK:
         rows.append([(T.BTN_JOIN_GROUP, T.CHANNEL_LINK)])
     await bot.send_message(chat_id, T.DOCS_TEXT, reply_markup=kb(rows))
+
+
+async def dzherela(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/dzherela: тільки власниці. Скільки людей прийшло з кожного слова."""
+    if not config.is_admin(update.effective_user.id):
+        return
+    today = int(datetime.now(config.TZ).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    st = db.sources_stats(today, config.ADMIN_IDS)
+    if not st:
+        await update.message.reply_text(T.SOURCES_EMPTY)
+        return
+    rows = "\n".join(T.SOURCES_ROW.format(word=esc(w), today=a, week=b, total=c) for w, (a, b, c) in st.items())
+    await update.message.reply_text(T.SOURCES.format(rows=rows), parse_mode=HTML)
 
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -775,7 +816,8 @@ async def post_init(app: Application):
     for a in config.ADMIN_IDS:
         try:
             await app.bot.set_my_commands([BotCommand("start", "Почати"), BotCommand("menu", "Меню"),
-                                           BotCommand("myid", "Мій Telegram ID")], scope=BotCommandScopeChat(a))
+                                           BotCommand("myid", "Мій Telegram ID"),
+                                           BotCommand("dzherela", "Звідки прийшли люди")], scope=BotCommandScopeChat(a))
         except Exception as e:
             log.warning("admin commands %s: %s", a, e)
     # «Агента оновлено»: один раз на кожну нову версію з texts.VERSION
@@ -791,6 +833,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("dzherela", dzherela))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     if launch:

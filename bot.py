@@ -86,7 +86,17 @@ def kb_bottom(uid):
             [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV], [T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
+    db.kv(f"menu:{uid}", T.MENU_VERSION)  # ця людина отримує свіже меню
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+
+async def refresh_menu(bot, chat_id, uid):
+    """Якщо в людини старе нижнє меню (до останньої зміни кнопок), надсилаємо нове."""
+    if db.kv(f"menu:{uid}") != T.MENU_VERSION:
+        try:
+            await bot.send_message(chat_id, T.MENU_UPDATED, reply_markup=kb_bottom(uid))
+        except Exception as e:
+            log.warning("menu refresh %s: %s", uid, e)
 
 
 def kb(rows):
@@ -625,6 +635,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
     uid, chat_id, data = update.effective_user.id, q.message.chat_id, q.data or ""
+    if q.message.chat.type == "private":
+        await refresh_menu(context.bot, chat_id, uid)
     if data == "gate":
         if await gate_ok(context.bot, chat_id, uid, fresh=True):
             await context.bot.send_message(chat_id, T.GATE_OK, reply_markup=kb_bottom(uid))
@@ -731,6 +743,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid, chat_id = u.id, msg.chat_id
     db.touch_user(uid, u.full_name, u.username or "")
     text = msg.text or ""
+
+    await refresh_menu(context.bot, chat_id, uid)
 
     # 1) Кнопки нижнього меню завжди першими: людина не «застрягає» в питанні чи розсилці
     if text in menu_buttons():
@@ -871,7 +885,7 @@ async def broadcast(context, chat_id, uid):
         if config.is_admin(target):
             continue
         try:
-            await context.bot.copy_message(target, int(from_chat), int(mid))
+            await context.bot.copy_message(target, int(from_chat), int(mid), reply_markup=kb_bottom(target))
             ok += 1
         except Forbidden:
             db.set_blocked(target)

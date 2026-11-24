@@ -651,6 +651,22 @@ async def send_ideas(bot, chat_id, head=None):
     await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=markup)
 
 
+async def sale_end_job(context):
+    """Наступного дня після кінця акції (з 10:00) один раз нагадує власниці прибрати акцію з ManyChat і дописів."""
+    if not T.SALE_UNTIL or not config.ADMIN_IDS:
+        return
+    try:
+        end = date.fromisoformat(T.SALE_UNTIL)
+    except ValueError:
+        return
+    now = datetime.now(config.TZ)
+    if now.date() <= end or now.hour < 10 or db.kv(f"sale_end:{T.SALE_UNTIL}") == "1":
+        return
+    db.kv(f"sale_end:{T.SALE_UNTIL}", "1")  # ДО відправки: повтору не буде
+    db.idea_add(T.SALE_END_IDEA)
+    await notify_admins(context.bot, T.SALE_END_REMINDER)
+
+
 async def ideas_job(context):
     """Щовечора о IDEAS_HOUR нагадує власниці про невиконані ідеї (один раз на день)."""
     now = datetime.now(config.TZ)
@@ -1063,7 +1079,8 @@ def main():
     app.job_queue.run_repeating(report_job, interval=600, first=60)  # звіт о 9:00, один раз на день
     app.job_queue.run_repeating(ideas_job, interval=300, first=90)   # ідеї о 19:00, один раз на день
     app.job_queue.run_repeating(group_welcome_cleanup_job, interval=600, first=120)  # прибирає привітання в групі
-    app.job_queue.run_repeating(remind_job, interval=600, first=150)  # нагадування про групу через добу
+    app.job_queue.run_repeating(remind_job, interval=600, first=150)
+    app.job_queue.run_repeating(sale_end_job, interval=600, first=180)  # нагадування після кінця акції  # нагадування про групу через добу
     app.add_error_handler(on_error)
     log.info("Агент запускається")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

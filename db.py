@@ -157,6 +157,12 @@ def kv(key, value=None):
         return value
 
 
+def kv_prefix(prefix):
+    """Усі пари (ключ, значення) з kv, що починаються з prefix."""
+    with conn() as c:
+        return [tuple(r) for r in c.execute("SELECT key, value FROM kv WHERE key LIKE ?", (prefix + "%",)).fetchall()]
+
+
 def log_ev(uid, ev, extra=""):
     with conn() as c:
         c.execute("INSERT INTO events (user_id, ev, extra, at) VALUES (?,?,?,?)", (uid, ev, extra, int(time.time())))

@@ -25,6 +25,7 @@ def init():
             joined INTEGER, last_seen INTEGER, blocked INTEGER DEFAULT 0)""")
         c.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
         c.execute("CREATE TABLE IF NOT EXISTS events (user_id INTEGER, ev TEXT, extra TEXT, at INTEGER)")
+        c.execute("CREATE TABLE IF NOT EXISTS sources (user_id INTEGER, word TEXT, at INTEGER)")
         c.execute("""CREATE TABLE IF NOT EXISTS ideas (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT,
             chat_id INTEGER, msg_id INTEGER, created INTEGER, done INTEGER DEFAULT 0)""")
 
@@ -55,6 +56,23 @@ def recent_users(limit=30):
         rows = c.execute("SELECT user_id, name, username, src, joined, blocked FROM users ORDER BY joined DESC LIMIT ?",
                          (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def add_source(uid, word):
+    """Звідки прийшла людина: слово з посилання ?start=СЛОВО і час (кожен перехід)."""
+    with conn() as c:
+        c.execute("INSERT INTO sources (user_id, word, at) VALUES (?,?,?)", (uid, word, int(time.time())))
+
+
+def sources_stats(since_today, exclude=()):
+    """{слово: (людей сьогодні, за 7 днів, усього)}; людей рахуємо без повторів."""
+    week = int(time.time()) - 7 * 86400
+    ex = ",".join(str(int(x)) for x in exclude) or "0"
+    q = (f"SELECT word, COUNT(DISTINCT CASE WHEN at>=? THEN user_id END), "
+         f"COUNT(DISTINCT CASE WHEN at>=? THEN user_id END), COUNT(DISTINCT user_id) "
+         f"FROM sources WHERE user_id NOT IN ({ex}) GROUP BY word ORDER BY 4 DESC")
+    with conn() as c:
+        return {r[0]: (r[1], r[2], r[3]) for r in c.execute(q, (since_today, week)).fetchall()}
 
 
 def idea_add(text, chat_id=0, msg_id=0):

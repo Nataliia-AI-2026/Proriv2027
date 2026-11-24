@@ -21,6 +21,7 @@ from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler,
 
 import config
 import db
+import quiz
 import texts as T
 
 # Додаток продажів: якщо в папці є launch.py, агент уміє запуски й оплату. Помилки в ньому не ховаємо.
@@ -73,7 +74,7 @@ MENU_PRODUCT_BTNS = {T.BTN_PUTIVNYK: "putivnyk", T.BTN_PRORYV: "proryv",
 
 
 def menu_buttons():
-    b = [main_button(), T.BTN_MAIN, T.BTN_GIFT, T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
+    b = [main_button(), T.BTN_MAIN, T.BTN_GIFT, T.BTN_QUIZ, T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
          *MENU_PRODUCT_BTNS]
     return set(b)
 
@@ -82,7 +83,7 @@ def kb_bottom(uid):
     """Нижнє меню: широка головна кнопка зверху, далі по 2 в ряд. Власниці ще «Керування»."""
     sale = sale_on()
     rows = [[main_button(), T.BTN_GIFT], [T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK],
-            [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
+            [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV], [T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
@@ -255,6 +256,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if src:
         db.add_source(u.id, src)
     door = door_for(src)
+    qkey = quiz.link_key(src)
+    if qkey is not None:
+        # тест за посиланням: одразу список тестів або вступ до тесту, без обов'язкової підписки
+        await context.bot.send_message(chat_id, T.QUIZ_GREET.format(name=esc(u.first_name)), parse_mode=HTML,
+                                       reply_markup=kb_bottom(u.id))
+        await quiz_show(context, chat_id, *(quiz.intro_view(qkey) if qkey else quiz.list_view()))
+        if is_new and not config.is_admin(u.id):
+            total, _, _ = db.stats()
+            await notify_admins(context.bot, T.ADMIN_NEW_USER.format(who=who(u), src=esc(src), total=total))
+        return
     if src in T.BUY_GREET or (door and door.get("buy")):
         # прийшла купити: одразу продукт з «Оплатити», без підписки і без подарунка, щоб не відволікати
         if door:
@@ -348,6 +359,50 @@ async def send_doc(bot, chat_id, which):
     if T.CHANNEL_LINK:
         rows.append([(T.BTN_JOIN_GROUP, T.CHANNEL_LINK)])
     await bot.send_message(chat_id, T.DOCS_TEXT, reply_markup=kb(rows))
+
+
+async def quiz_show(context, chat_id, text, rows, edit_msg=None):
+    """Показати екран тесту: якщо можна, редагуємо те саме повідомлення, щоб чат не засмічувався."""
+    if edit_msg is not None and edit_msg.text:
+        try:
+            await edit_msg.edit_text(text, parse_mode=HTML, reply_markup=kb(rows), disable_web_page_preview=True)
+            return
+        except Exception:
+            pass
+    await context.bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=kb(rows), disable_web_page_preview=True)
+
+
+async def on_quiz_callback(update, context, data):
+    q = update.callback_query
+    u = update.effective_user
+    chat_id = q.message.chat_id
+    parts = data.split(":")
+    if data == "qz:list":
+        await quiz_show(context, chat_id, *quiz.list_view(), edit_msg=q.message)
+    elif parts[1] == "in" and len(parts) == 3 and parts[2] in T.QUIZZES:
+        await quiz_show(context, chat_id, *quiz.intro_view(parts[2]), edit_msg=q.message)
+    elif parts[1] == "go" and len(parts) == 3 and parts[2] in T.QUIZZES:
+        await quiz_show(context, chat_id, *quiz.begin(u.id, parts[2]), edit_msg=q.message)
+    elif parts[1] == "a" and len(parts) == 5 and parts[3].isdigit() and parts[4].isdigit():
+        key = parts[2]
+        res = quiz.answer(u.id, key, int(parts[3]), int(parts[4]))
+        if res is None:  # стара кнопка (після перезапуску тесту): пропонуємо почати знову
+            if key in T.QUIZZES:
+                await context.bot.send_message(chat_id, T.QUIZ_STALE)
+                await quiz_show(context, chat_id, *quiz.intro_view(key))
+            return
+        await quiz_show(context, chat_id, res[1], res[2], edit_msg=q.message)
+        if res[0] == "r" and not config.is_admin(u.id):
+            await notify_admins(context.bot, T.ADMIN_QUIZ_DONE.format(
+                quiz=esc(T.QUIZZES[key]["title"]), who=who(u), uid=u.id,
+                result=esc(T.QUIZZES[key]["results"][res[3]][0])))
+
+
+async def test_stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/test_stat: тільки власниці. Скільки почали, дійшли до кінця і з якими результатами."""
+    if not config.is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text(quiz.stats_text(config.ADMIN_IDS), parse_mode=HTML)
 
 
 async def dzherela(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -582,7 +637,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, T.GATE_NOT_YET)
         return
     kind, _, arg = data.partition(":")
-    buy_cb = kind in ("pay", "paid", "doc") or (kind in ("prod", "write") and arg in T.BUY_PRODUCTS)
+    # без обов'язкової підписки: оплата, документи, тести і кнопки продуктів/запису під описами
+    buy_cb = kind in ("pay", "paid", "doc", "qz", "prod", "write")
     if not config.is_admin(uid) and not buy_cb and not await gate_ok(context.bot, chat_id, uid):
         return
     if launch and data.startswith("lc:"):
@@ -597,6 +653,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("prod:") and data[5:] in T.PRODUCTS:
         db.log_ev(uid, "product", data[5:])
         await show_product(chat_id, context, data[5:], q.message)
+    elif data.startswith("qz:"):
+        await on_quiz_callback(update, context, data)
     elif data.startswith("pay:") and data[4:] in T.PAY_AMOUNT:
         key = data[4:]
         db.log_ev(uid, "pay", key)
@@ -677,13 +735,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1) Кнопки нижнього меню завжди першими: людина не «застрягає» в питанні чи розсилці
     if text in menu_buttons():
         state(uid, "")
-        buy_btn = MENU_PRODUCT_BTNS.get(text) in T.BUY_PRODUCTS  # Путівник і Прорив у меню без підписки
+        # Путівник, Прорив і Тести в меню без підписки
+        buy_btn = MENU_PRODUCT_BTNS.get(text) in T.BUY_PRODUCTS or text == T.BTN_QUIZ
         if not buy_btn and not await gate_ok(context.bot, chat_id, uid):
             return
         if launch and text == T.BTN_LAUNCH:
             await launch.show_card(context.bot, chat_id, uid)
         elif text == T.BTN_MAIN:
             await show_about(chat_id, context, uid)
+        elif text == T.BTN_QUIZ:
+            db.log_ev(uid, "quiz_menu")
+            await quiz_show(context, chat_id, *quiz.list_view())
         elif text == T.BTN_GIFT:
             db.log_ev(uid, "gift_menu")
             await context.bot.send_message(chat_id, T.GIFT_MENU_TEXT, parse_mode=HTML,
@@ -771,7 +833,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.log_ev(uid, "question", topic)
         head = T.ADMIN_QUESTION.format(who=who(u), uid=uid, text=esc(text or msg.caption or "(голосове чи файл нижче)"))
         if topic:
-            title = launch.topic_title(topic) if launch else ""
+            title = (launch.topic_title(topic) if launch else "") or quiz.topic_title(topic)
             title = title or T.PRODUCTS.get(topic, (topic,))[0]
             head = f"Тема: <b>{esc(title)}</b>\n" + head
         for a in config.ADMIN_IDS:
@@ -888,7 +950,8 @@ async def post_init(app: Application):
         try:
             await app.bot.set_my_commands([BotCommand("start", "Почати"), BotCommand("menu", "Меню"),
                                            BotCommand("myid", "Мій Telegram ID"),
-                                           BotCommand("dzherela", "Звідки прийшли люди")], scope=BotCommandScopeChat(a))
+                                           BotCommand("dzherela", "Звідки прийшли люди"),
+                                           BotCommand("test_stat", "Статистика тестів")], scope=BotCommandScopeChat(a))
         except Exception as e:
             log.warning("admin commands %s: %s", a, e)
     # «Агента оновлено»: один раз на кожну нову версію з texts.VERSION
@@ -905,6 +968,7 @@ def main():
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("dzherela", dzherela))
+    app.add_handler(CommandHandler("test_stat", test_stat))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(ChatMemberHandler(on_group_member, ChatMemberHandler.CHAT_MEMBER))

@@ -26,6 +26,8 @@ def init():
         c.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
         c.execute("CREATE TABLE IF NOT EXISTS events (user_id INTEGER, ev TEXT, extra TEXT, at INTEGER)")
         c.execute("CREATE TABLE IF NOT EXISTS sources (user_id INTEGER, word TEXT, at INTEGER)")
+        c.execute("""CREATE TABLE IF NOT EXISTS quiz_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
+            quiz TEXT, started INTEGER, finished INTEGER, result TEXT)""")
         c.execute("""CREATE TABLE IF NOT EXISTS ideas (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT,
             chat_id INTEGER, msg_id INTEGER, created INTEGER, done INTEGER DEFAULT 0)""")
 
@@ -73,6 +75,35 @@ def sources_stats(since_today, exclude=()):
          f"FROM sources WHERE user_id NOT IN ({ex}) GROUP BY word ORDER BY 4 DESC")
     with conn() as c:
         return {r[0]: (r[1], r[2], r[3]) for r in c.execute(q, (since_today, week)).fetchall()}
+
+
+def quiz_start(uid, quiz):
+    """Новий прохід тесту; повертає його номер."""
+    with conn() as c:
+        cur = c.execute("INSERT INTO quiz_runs (user_id, quiz, started) VALUES (?,?,?)", (uid, quiz, int(time.time())))
+        return cur.lastrowid
+
+
+def quiz_finish(run_id, result):
+    with conn() as c:
+        c.execute("UPDATE quiz_runs SET finished=?, result=? WHERE id=?", (int(time.time()), result, run_id))
+
+
+def quiz_stats(exclude=()):
+    """{тест: (почали людей, дійшли до кінця людей, {результат: людей})} без повторів."""
+    ex = ",".join(str(int(x)) for x in exclude) or "0"
+    out = {}
+    with conn() as c:
+        for quiz, started, done in c.execute(
+                f"SELECT quiz, COUNT(DISTINCT user_id), COUNT(DISTINCT CASE WHEN finished IS NOT NULL THEN user_id END) "
+                f"FROM quiz_runs WHERE user_id NOT IN ({ex}) GROUP BY quiz").fetchall():
+            out[quiz] = (started, done, {})
+        for quiz, result, n in c.execute(
+                f"SELECT quiz, result, COUNT(DISTINCT user_id) FROM quiz_runs WHERE finished IS NOT NULL "
+                f"AND user_id NOT IN ({ex}) GROUP BY quiz, result").fetchall():
+            if quiz in out:
+                out[quiz][2][result] = n
+    return out
 
 
 def idea_add(text, chat_id=0, msg_id=0):

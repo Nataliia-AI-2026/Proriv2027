@@ -12,8 +12,8 @@ import time
 from collections import Counter
 from datetime import date, datetime, timedelta
 
-from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup,
-                      ReplyKeyboardMarkup, Update)
+from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
+                      ReplyKeyboardMarkup, Update, WebAppInfo)
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, NetworkError, TimedOut
 from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
@@ -23,6 +23,7 @@ import config
 import db
 import quiz
 import texts as T
+import webapp
 
 # Додаток продажів: якщо в папці є launch.py, агент уміє запуски й оплату. Помилки в ньому не ховаємо.
 if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "launch.py")):
@@ -75,24 +76,35 @@ MENU_PRODUCT_BTNS = {T.BTN_PUTIVNYK: "putivnyk", T.BTN_PRORYV: "proryv",
 
 def menu_buttons():
     b = [main_button(), T.BTN_MAIN, T.BTN_GIFT, T.BTN_QUIZ, T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
+         T.BTN_APP,
          *MENU_PRODUCT_BTNS]
     return set(b)
+
+
+def menu_version():
+    """Версія меню: з міні-застосунком, щойно в Railway є адреса сторінки, інакше стара."""
+    return T.MENU_VERSION if webapp.app_url() else T.MENU_VERSION_NOAPP
 
 
 def kb_bottom(uid):
     """Нижнє меню: широка головна кнопка зверху, далі по 2 в ряд. Власниці ще «Керування»."""
     sale = sale_on()
     rows = [[main_button(), T.BTN_GIFT], [T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK],
-            [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV], [T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
+            [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV]]
+    url = webapp.app_url()
+    if url:  # міні-застосунок замість «Мої продукти» і «Контакти»
+        rows += [[KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))], [T.BTN_QUIZ, T.BTN_ASK], [T.BTN_CABINET]]
+    else:
+        rows += [[T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
-    db.kv(f"menu:{uid}", T.MENU_VERSION)  # ця людина отримує свіже меню
+    db.kv(f"menu:{uid}", menu_version())  # ця людина отримує свіже меню
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
 async def refresh_menu(bot, chat_id, uid):
     """Якщо в людини старе нижнє меню (до останньої зміни кнопок), надсилаємо нове."""
-    if db.kv(f"menu:{uid}") != T.MENU_VERSION:
+    if db.kv(f"menu:{uid}") != menu_version():
         try:
             await bot.send_message(chat_id, T.MENU_UPDATED, reply_markup=kb_bottom(uid))
         except Exception as e:
@@ -607,9 +619,9 @@ async def show_contacts(chat_id, context, uid=0):
     await send(context.bot, chat_id, T.CONTACTS, kb(rows), T.PHOTOS.get("contacts"))
 
 
-async def ask_start(chat_id, context, uid, topic=""):
+async def ask_start(chat_id, context, uid, topic="", text=None):
     state(uid, f"ask:{topic}")
-    await context.bot.send_message(chat_id, T.ASK, parse_mode=HTML,
+    await context.bot.send_message(chat_id, text or T.ASK, parse_mode=HTML,
                                    reply_markup=kb([[(T.BTN_CANCEL, "ask_cancel")]]))
 
 
@@ -829,6 +841,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.touch_user(uid, u.full_name, u.username or "")
     text = msg.text or ""
 
+    if msg.web_app_data:  # натиснули кнопку в міні-застосунку
+        state(uid, "")
+        await on_app_action(context, chat_id, uid, msg.web_app_data.data or "")
+        return
+
     await refresh_menu(context.bot, chat_id, uid)
 
     # 1) Кнопки нижнього меню завжди першими: людина не «застрягає» в питанні чи розсилці
@@ -850,7 +867,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, T.GIFT_MENU_TEXT, parse_mode=HTML,
                                            reply_markup=kb([[(T.GIFT_MENU_BTN, T.GIFT_LINK)],
                                                             [(T.GIFT_MENU_NEXT, "prod:diag")], [(T.BTN_HOME, "home")]]))
-        elif text in (T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD):
+        elif text in (T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_APP):
             await show_products(chat_id, context, uid=uid)
         elif text in MENU_PRODUCT_BTNS:
             key = MENU_PRODUCT_BTNS[text]
@@ -959,6 +976,41 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== розсилка ==================
 
+# ================== міні-застосунок «Послуги, запис і контакти» ==================
+
+def app_data(bot_name=""):
+    """Що бачить сторінка: тексти і ціни з texts.py, акція, фото, посилання."""
+    def img(rel):
+        return "/images/" + os.path.basename(rel) if rel and media_path(rel) else ""
+    app = dict(T.APP, photo=img(T.APP.get("photo")))
+    app["docs"] = [list(d) for d in T.APP.get("docs", [])]
+    cards = [dict(c, photo=img(c.get("photo") or T.PRODUCT_PHOTOS.get(c["key"], "")), btn=list(c["btn"]),
+                  more=(f"prod:{c['key']}" if c["key"] in T.PRODUCTS and not c["btn"][1].startswith("prod:") else ""))
+             for c in T.APP_CARDS]
+    return {"app": app, "sale": sale_on(), "cards": cards, "links": [list(x) for x in T.APP_LINKS],
+            "channel": T.CHANNEL_LINK, "bot": bot_name}
+
+
+async def on_app_action(context, chat_id, uid, data):
+    """Кнопка з міні-застосунку: продукт (з «Оплатити»), запис або документ. Без обов'язкової підписки."""
+    try:
+        action = str(json.loads(data).get("a", ""))
+    except Exception:
+        action = data
+    kind, _, arg = action.partition(":")
+    db.log_ev(uid, "app", action[:40])
+    if kind == "prod" and arg in T.PRODUCTS:
+        db.log_ev(uid, "product", arg)
+        await show_product(chat_id, context, arg)
+    elif kind == "write" and re.fullmatch(r"[a-z_]{1,20}", arg or ""):
+        title = T.PRODUCTS.get(arg, ("",))[0]
+        await ask_start(chat_id, context, uid, arg, T.APP_WRITE.format(title=esc(title or "запис")))
+    elif action in ("doc:offer", "doc:privacy"):
+        await send_doc(context.bot, chat_id, arg)
+    else:
+        await context.bot.send_message(chat_id, T.MENU_HINT, reply_markup=kb_bottom(uid))
+
+
 async def broadcast(context, chat_id, uid):
     src = db.kv(f"bc_src:{uid}") or ""
     if state(uid) != "bc_ready" or ":" not in src:
@@ -1055,6 +1107,8 @@ async def post_init(app: Application):
                                            BotCommand("test_stat", "Статистика тестів")], scope=BotCommandScopeChat(a))
         except Exception as e:
             log.warning("admin commands %s: %s", a, e)
+    bot_name = app.bot.username or ""
+    webapp.start(lambda: app_data(bot_name), lambda uid: db.log_ev(uid, "app_open"))
     # «Агента оновлено»: один раз на кожну нову версію з texts.VERSION
     if config.ADMIN_IDS and db.kv("version") != T.VERSION:  # без ADMIN_ID не позначаємо, щоб повідомлення не загубилось
         db.kv("version", T.VERSION)

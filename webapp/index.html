@@ -196,9 +196,9 @@ function act(action) {
     try { tg.sendData(JSON.stringify({ a: action })); return; } catch (e) {}
   }
   if (DATA && DATA.bot) {
-    const key = action.split(":")[1] || "";
-    const start = action.startsWith("prod:") || action.startsWith("write:") ? key : "";
-    openUrl("https://t.me/" + DATA.bot + (start ? "?start=" + encodeURIComponent(start) : ""));
+    // відкрито з фіолетової кнопки чи кнопки під повідомленням: агент отримає ту саму дію через ?start=app-…
+    const start = /^(prod|write|doc):[a-z_]+$/.test(action) ? "app-" + action.replace(":", "-") : "";
+    openUrl("https://t.me/" + DATA.bot + (start ? "?start=" + start : ""));
     if (tg) setTimeout(() => tg.close(), 300);
   }
 }

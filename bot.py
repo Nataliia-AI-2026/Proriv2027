@@ -13,7 +13,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 
 from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
-                      ReplyKeyboardMarkup, Update, WebAppInfo)
+                      MenuButtonCommands, MenuButtonWebApp, ReplyKeyboardMarkup, Update, WebAppInfo)
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, NetworkError, TimedOut
 from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
@@ -76,7 +76,7 @@ MENU_PRODUCT_BTNS = {T.BTN_PUTIVNYK: "putivnyk", T.BTN_PRORYV: "proryv",
 
 def menu_buttons():
     b = [main_button(), T.BTN_MAIN, T.BTN_GIFT, T.BTN_QUIZ, T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_ASK, T.BTN_CABINET, T.BTN_CONTACTS, T.BTN_ADMIN,
-         T.BTN_APP,
+         T.BTN_APP, T.BTN_APP_OLD,
          *MENU_PRODUCT_BTNS]
     return set(b)
 
@@ -120,6 +120,13 @@ def kb(rows):
     """rows: [[("Текст", "callback або https://посилання"), ...], ...]"""
     return InlineKeyboardMarkup([[InlineKeyboardButton(t, url=d) if d.startswith("http") else
                                   InlineKeyboardButton(t, callback_data=d) for t, d in r] for r in rows if r])
+
+
+def app_button_row(text=None):
+    """Рядок з кнопкою, що відкриває міні-застосунок (або список продуктів, поки адреси немає)."""
+    url = webapp.app_url()
+    text = text or T.BTN_APP_INLINE
+    return [InlineKeyboardButton(text, web_app=WebAppInfo(url)) if url else InlineKeyboardButton(text, callback_data="products")]
 
 
 def kb_nav(back=None):
@@ -334,6 +341,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     chat_id = update.effective_chat.id
     src = start_word(context.args)
+    if src.startswith("app-"):  # кнопка з міні-застосунку, відкритого не з нижнього меню
+        db.touch_user(u.id, u.full_name, u.username or "")
+        state(u.id, "")
+        kind, _, arg = src[4:].partition("-")
+        await on_app_action(context, chat_id, u.id, json.dumps({"a": f"{kind}:{arg}"}))
+        return
     is_new = db.touch_user(u.id, u.full_name, u.username or "", src)
     state(u.id, "")
     db.log_ev(u.id, "start", src)
@@ -379,12 +392,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif is_new:
         await send(context.bot, chat_id, T.WELCOME.format(name=esc(u.first_name), owner=T.OWNER_ROD),
                    kb_bottom(u.id), T.PHOTOS.get("welcome"))
+        if webapp.app_url():
+            await context.bot.send_message(chat_id, T.APP_INVITE, parse_mode=HTML,
+                                           reply_markup=InlineKeyboardMarkup([app_button_row()]))
         total, _, _ = db.stats()
         if not config.is_admin(u.id):
             await notify_admins(context.bot, T.ADMIN_NEW_USER.format(who=who(u), src=esc(src or "напряму"), total=total))
     else:
-        await update.message.reply_text(T.WELCOME_BACK.format(name=esc(u.first_name)), parse_mode=HTML,
-                                        reply_markup=kb_bottom(u.id))
+        if webapp.app_url():  # кнопка застосунку під привітанням; нижнє меню людина вже має (оновимо, якщо старе)
+            await refresh_menu(context.bot, chat_id, u.id)
+            await update.message.reply_text(T.WELCOME_BACK.format(name=esc(u.first_name)), parse_mode=HTML,
+                                            reply_markup=InlineKeyboardMarkup([app_button_row()]))
+        else:
+            await update.message.reply_text(T.WELCOME_BACK.format(name=esc(u.first_name)), parse_mode=HTML,
+                                            reply_markup=kb_bottom(u.id))
     if not await gate_ok(context.bot, chat_id, u.id, src, is_new, fresh=True):
         return
     await after_start(context, chat_id, u.id, src, is_new)
@@ -563,7 +584,8 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_about(chat_id, context, uid=0):
     db.log_ev(uid, "about")
-    await send(context.bot, chat_id, T.ABOUT, kb_nav(), T.PHOTOS.get("about"))
+    markup = InlineKeyboardMarkup([app_button_row(), *kb_nav().inline_keyboard])
+    await send(context.bot, chat_id, T.ABOUT, markup, T.PHOTOS.get("about"))
 
 
 async def show_products(chat_id, context, edit_msg=None, uid=0):
@@ -872,7 +894,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, T.GIFT_MENU_TEXT, parse_mode=HTML,
                                            reply_markup=kb([[(T.GIFT_MENU_BTN, T.GIFT_LINK)],
                                                             [(T.GIFT_MENU_NEXT, "prod:diag")], [(T.BTN_HOME, "home")]]))
-        elif text in (T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_APP):
+        elif text in (T.BTN_PRODUCTS, T.BTN_PRODUCTS_OLD, T.BTN_APP, T.BTN_APP_OLD):
             await show_products(chat_id, context, uid=uid)
         elif text in MENU_PRODUCT_BTNS:
             key = MENU_PRODUCT_BTNS[text]
@@ -1133,6 +1155,12 @@ async def post_init(app: Application):
         except Exception as e:
             log.warning("admin commands %s: %s", a, e)
     bot_name = app.bot.username or ""
+    try:  # фіолетова кнопка ліворуч від поля повідомлення: відкриває застосунок
+        url = webapp.app_url()
+        await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(T.APP_MENU_BTN, WebAppInfo(url)) if url
+                                           else MenuButtonCommands())
+    except Exception as e:
+        log.warning("menu button: %s", e)
     webapp.start(lambda: app_data(bot_name), lambda uid: db.log_ev(uid, "app_open"))
     # «Агента оновлено»: один раз на кожну нову версію з texts.VERSION
     if config.ADMIN_IDS and db.kv("version") != T.VERSION:  # без ADMIN_ID не позначаємо, щоб повідомлення не загубилось

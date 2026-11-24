@@ -175,6 +175,63 @@ def gate_on():
     return bool(T.CHANNEL or T.CHANNEL_LINK)
 
 
+async def is_member(bot, uid):
+    """True: людина в групі/каналі; False: ні; None: перевірити не можна (канал не задано чи агент не адмін)."""
+    chat = channel_chat()
+    if not gate_on() or not chat:
+        return None
+    try:
+        m = await bot.get_chat_member(int(chat) if str(chat).lstrip("-").isdigit() else chat, uid)
+    except Exception as e:
+        log.warning("member %s: %s", chat, e)
+        return None
+    ok = m.status in ("member", "administrator", "creator", "restricted")
+    if ok:
+        db.kv(f"gate:{uid}", str(int(time.time())))
+    return ok
+
+
+async def invite(bot, chat_id, uid, text):
+    """М'яке запрошення в групу з кнопками «Підписатися» і «Я підписалась». Лише якщо людина не в групі."""
+    if config.is_admin(uid) or not T.CHANNEL_LINK or await is_member(bot, uid) is not False:
+        return
+    db.log_ev(uid, "invite")
+    await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=kb(
+        [[(T.BTN_INVITE_SUB, T.CHANNEL_LINK)], [(T.BTN_INVITE_CHECK, "inv:check")]]))
+
+
+def plan_remind(uid):
+    """Нагадати про групу через добу (один раз за весь час), якщо людина прийшла з ManyChat без підписки."""
+    if not config.is_admin(uid) and not db.kv(f"remind_at:{uid}") and db.kv(f"reminded:{uid}") != "1":
+        db.kv(f"remind_at:{uid}", str(int(time.time() + T.REMIND_AFTER_HOURS * 3600)))
+
+
+async def remind_job(context):
+    """Раз на 10 хвилин: кому настав час нагадування, і зараз денний час, надсилаємо одне повідомлення."""
+    hour = datetime.now(config.TZ).hour
+    if not (T.REMIND_FROM_HOUR <= hour < T.REMIND_TO_HOUR):
+        return
+    now = time.time()
+    for key, value in db.kv_prefix("remind_at:"):
+        if not value or not value.isdigit() or int(value) > now:
+            continue
+        uid = int(key.split(":", 1)[1])
+        db.kv(key, "")
+        db.kv(f"reminded:{uid}", "1")  # ДО відправки: повтору не буде навіть після перезапуску
+        if await is_member(context.bot, uid) is not False:
+            continue
+        u = db.user(uid) or {}
+        try:
+            await context.bot.send_message(
+                uid, T.REMIND_TEXT.format(name=esc((u.get("name") or "").split(" ")[0])), parse_mode=HTML,
+                reply_markup=kb([[(T.BTN_INVITE_SUB, T.CHANNEL_LINK)], [(T.BTN_INVITE_CHECK, "inv:check")]]))
+            db.log_ev(uid, "remind")
+        except Forbidden:
+            db.set_blocked(uid)
+        except Exception as e:
+            log.warning("remind %s: %s", uid, e)
+
+
 def channel_chat():
     """Канал для перевірки: @назва з texts.py або ID закритого каналу, який агент запам'ятав сам."""
     return T.CHANNEL or db.kv("channel_id") or ""
@@ -267,6 +324,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.add_source(u.id, src)
     door = door_for(src)
     qkey = quiz.link_key(src)
+    if qkey is not None or src in T.BUY_GREET or (door and door.get("buy")):
+        plan_remind(u.id)  # прийшла з ManyChat без обов'язкової підписки: нагадаємо про групу завтра
     if qkey is not None:
         # тест за посиланням: одразу список тестів або вступ до тесту, без обов'язкової підписки
         await context.bot.send_message(chat_id, T.QUIZ_GREET.format(name=esc(u.first_name)), parse_mode=HTML,
@@ -402,6 +461,8 @@ async def on_quiz_callback(update, context, data):
                 await quiz_show(context, chat_id, *quiz.intro_view(key))
             return
         await quiz_show(context, chat_id, res[1], res[2], edit_msg=q.message)
+        if res[0] == "r":
+            await invite(context.bot, chat_id, u.id, T.INVITE_AFTER_QUIZ)
         if res[0] == "r" and not config.is_admin(u.id):
             await notify_admins(context.bot, T.ADMIN_QUIZ_DONE.format(
                 quiz=esc(T.QUIZZES[key]["title"]), who=who(u), uid=u.id,
@@ -650,7 +711,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     kind, _, arg = data.partition(":")
     # без обов'язкової підписки: оплата, документи, тести і кнопки продуктів/запису під описами
-    buy_cb = kind in ("pay", "paid", "doc", "qz", "prod", "write")
+    buy_cb = kind in ("pay", "paid", "doc", "qz", "prod", "write", "inv")
     if not config.is_admin(uid) and not buy_cb and not await gate_ok(context.bot, chat_id, uid):
         return
     if launch and data.startswith("lc:"):
@@ -665,6 +726,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("prod:") and data[5:] in T.PRODUCTS:
         db.log_ev(uid, "product", data[5:])
         await show_product(chat_id, context, data[5:], q.message)
+    elif data == "inv:check":
+        if await is_member(context.bot, uid):
+            db.log_ev(uid, "invite_ok")
+            db.kv(f"remind_at:{uid}", "")
+            await context.bot.send_message(chat_id, T.INVITE_OK, reply_markup=kb_bottom(uid))
+            await send_gift(context.bot, chat_id, uid)
+        else:
+            await context.bot.send_message(chat_id, T.GATE_NOT_YET)
     elif data.startswith("qz:"):
         await on_quiz_callback(update, context, data)
     elif data.startswith("pay:") and data[4:] in T.PAY_AMOUNT:
@@ -838,6 +907,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 log.warning("payment to admin: %s", e)
         await msg.reply_text(T.PAID_THANKS if first else T.PAID_MORE, reply_markup=kb_bottom(uid))
+        if first:
+            await invite(context.bot, chat_id, uid, T.INVITE_AFTER_PAID)
         return
 
     # 4) Людина ставить питання: передаємо власниці
@@ -992,6 +1063,7 @@ def main():
     app.job_queue.run_repeating(report_job, interval=600, first=60)  # звіт о 9:00, один раз на день
     app.job_queue.run_repeating(ideas_job, interval=300, first=90)   # ідеї о 19:00, один раз на день
     app.job_queue.run_repeating(group_welcome_cleanup_job, interval=600, first=120)  # прибирає привітання в групі
+    app.job_queue.run_repeating(remind_job, interval=600, first=150)  # нагадування про групу через добу
     app.add_error_handler(on_error)
     log.info("Агент запускається")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

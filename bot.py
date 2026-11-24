@@ -82,8 +82,11 @@ def menu_buttons():
 
 
 def menu_version():
-    """Версія меню: з міні-застосунком, щойно в Railway є адреса сторінки, інакше стара."""
-    return T.MENU_VERSION if webapp.app_url() else T.MENU_VERSION_NOAPP
+    """Версія меню: з міні-застосунком, щойно в Railway є адреса сторінки, інакше стара.
+    Під час акції інша версія, щоб після SALE_UNTIL люди самі отримали меню без кнопки Прориву."""
+    if not webapp.app_url():
+        return T.MENU_VERSION_NOAPP
+    return T.MENU_VERSION + ("-sale" if sale_on() else "")
 
 
 def kb_bottom(uid):
@@ -92,8 +95,9 @@ def kb_bottom(uid):
     products = [[T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK], [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV]]
     url = webapp.app_url()
     if url:  # міні-застосунок (другий рядок) замість «Мої продукти» і «Контакти»
-        rows = [[main_button(), T.BTN_GIFT], [KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))], *products,
-                [T.BTN_QUIZ, T.BTN_ASK], [T.BTN_CABINET]]
+        # Путівник лише в застосунку; Прорив у меню тільки під час акції (по SALE_UNTIL), потім зникає сам
+        rows = [[main_button(), T.BTN_GIFT], [KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))],
+                *([[T.BTN_PRORYV_SALE]] if sale else []), [T.BTN_QUIZ, T.BTN_ASK], [T.BTN_CABINET]]
     else:
         rows = [[main_button(), T.BTN_GIFT], *products, [T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK],
                 [T.BTN_CABINET, T.BTN_CONTACTS]]

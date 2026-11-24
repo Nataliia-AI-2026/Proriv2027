@@ -89,13 +89,14 @@ def menu_version():
 def kb_bottom(uid):
     """Нижнє меню: широка головна кнопка зверху, далі по 2 в ряд. Власниці ще «Керування»."""
     sale = sale_on()
-    rows = [[main_button(), T.BTN_GIFT], [T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK],
-            [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV]]
+    products = [[T.BTN_PUTIVNYK_SALE if sale else T.BTN_PUTIVNYK], [T.BTN_PRORYV_SALE if sale else T.BTN_PRORYV]]
     url = webapp.app_url()
-    if url:  # міні-застосунок замість «Мої продукти» і «Контакти»
-        rows += [[KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))], [T.BTN_QUIZ, T.BTN_ASK], [T.BTN_CABINET]]
+    if url:  # міні-застосунок (другий рядок) замість «Мої продукти» і «Контакти»
+        rows = [[main_button(), T.BTN_GIFT], [KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))], *products,
+                [T.BTN_QUIZ, T.BTN_ASK], [T.BTN_CABINET]]
     else:
-        rows += [[T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK], [T.BTN_CABINET, T.BTN_CONTACTS]]
+        rows = [[main_button(), T.BTN_GIFT], *products, [T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK],
+                [T.BTN_CABINET, T.BTN_CONTACTS]]
     if config.is_admin(uid):
         rows.append([T.BTN_ADMIN])
     db.kv(f"menu:{uid}", menu_version())  # ця людина отримує свіже меню

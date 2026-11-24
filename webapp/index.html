@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Послуги, запис і контакти</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #faf6f0; --card: #ffffff; --ink: #3a2e2a; --soft: #7a6a60; --gold: #b8893b;
+    --gold2: #d9b36a; --line: #efe5d6; --peach: #f6e7da; --red: #c0503a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 18px 16px 40px; }
+  .hero { text-align: center; padding: 8px 4px 4px; }
+  .avatar { width: 116px; height: 116px; border-radius: 50%; object-fit: cover; object-position: 50% 18%;
+            border: 3px solid var(--gold2); box-shadow: 0 6px 20px rgba(184,137,59,.25); }
+  h1 { font-size: 24px; margin: 12px 0 4px; letter-spacing: .2px; }
+  .role { color: var(--soft); font-size: 14px; margin: 0 8px; }
+  .intro { margin: 12px 6px 0; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+  .chip { background: var(--peach); color: var(--ink); border-radius: 999px; padding: 5px 11px; font-size: 13px; }
+  .sale { margin: 18px 0 0; padding: 12px 14px; border-radius: 16px; text-align: center; font-weight: 600;
+          background: linear-gradient(135deg, #f7dca0, #e9b85f); color: #4a3313; }
+  .hint { margin: 14px 4px 0; text-align: center; color: var(--soft); font-size: 15px; }
+  h2 { font-size: 20px; margin: 26px 4px 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; overflow: hidden;
+          margin-bottom: 14px; box-shadow: 0 4px 14px rgba(58,46,42,.05); }
+  .card img { width: 100%; height: 230px; object-fit: cover; object-position: 50% 0; display: block; }
+  .body { padding: 14px 16px 16px; }
+  .name { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
+  .text { white-space: pre-line; margin: 0 0 10px; font-size: 15px; }
+  .meta { color: var(--soft); font-size: 14px; margin: 2px 0; }
+  .price { margin: 8px 0 12px; font-size: 16px; }
+  .price b { font-size: 18px; }
+  .price s { color: var(--soft); margin-right: 6px; }
+  .badge { display: inline-block; background: var(--red); color: #fff; border-radius: 8px; padding: 2px 8px;
+           font-size: 13px; font-weight: 600; margin-left: 4px; }
+  .btn { display: block; width: 100%; border: 0; border-radius: 14px; padding: 13px 14px; font-size: 16px;
+         font-weight: 600; cursor: pointer; text-align: center; text-decoration: none; }
+  .main { background: linear-gradient(135deg, var(--gold2), var(--gold)); color: #fff; }
+  .ghost { background: transparent; color: var(--gold); border: 1.5px solid var(--gold2); margin-top: 8px; }
+  .channel { background: linear-gradient(135deg, #3b8fd6, #2a6fb5); color: #fff; margin-bottom: 12px; }
+  .list { background: var(--card); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 13px 16px;
+         border-bottom: 1px solid var(--line); cursor: pointer; }
+  .row:last-child { border-bottom: 0; }
+  .row span:first-child { color: var(--soft); font-size: 14px; }
+  .row span:last-child { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; margin-left: 10px; word-break: break-word; }
+  .docs { display: flex; gap: 8px; margin-top: 12px; }
+  .docs .btn { font-size: 13px; padding: 10px 8px; font-weight: 500; }
+  .footer { text-align: center; color: var(--soft); font-size: 13px; margin-top: 22px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: #fff;
+           padding: 10px 16px; border-radius: 12px; font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  .toast.on { opacity: .95; }
+  .err { text-align: center; color: var(--soft); padding: 60px 20px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="root"><div class="err">Завантажую… 🌿</div></div>
+<div class="toast" id="toast"></div>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor("#faf6f0"); tg.setBackgroundColor("#faf6f0"); } catch (e) {} }
+let DATA = null;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = text;
+  return e;
+}
+function toast(t) {
+  const x = document.getElementById("toast"); x.textContent = t; x.classList.add("on");
+  setTimeout(() => x.classList.remove("on"), 1800);
+}
+function openUrl(url) {
+  if (!tg) { window.open(url, "_blank"); return; }
+  if (/^https:\/\/t\.me\//.test(url)) tg.openTelegramLink(url); else tg.openLink(url);
+}
+// Кнопка → повідомлення агенту (він відповідає в чаті). Відкрито з меню: sendData. Інакше: посилання на агента.
+function act(action) {
+  const keyboardLaunch = tg && tg.initData && !(tg.initDataUnsafe && tg.initDataUnsafe.query_id);
+  if (keyboardLaunch) {
+    try { tg.sendData(JSON.stringify({ a: action })); return; } catch (e) {}
+  }
+  if (DATA && DATA.bot) {
+    const key = action.split(":")[1] || "";
+    const start = action.startsWith("prod:") || action.startsWith("write:") ? key : "";
+    openUrl("https://t.me/" + DATA.bot + (start ? "?start=" + encodeURIComponent(start) : ""));
+    if (tg) setTimeout(() => tg.close(), 300);
+  }
+}
+function priceLine(c, sale) {
+  const p = el("div", "price");
+  const s = sale && c.sale;
+  if (s && /грн/.test(c.sale) && /грн/.test(c.price)) {
+    p.append(el("s", "", c.price), el("b", "", c.sale), el("span", "badge", "🔥"));
+  } else if (s) {
+    p.append(el("span", "", "💛 " + c.price), document.createElement("br"), el("span", "badge", "🔥 " + c.sale));
+  } else {
+    const b = el("b", "", /грн|€/.test(c.price) ? c.price : "");
+    if (b.textContent) p.append(el("span", "", "💰 "), b); else p.append(el("span", "", "💛 " + c.price));
+  }
+  return p;
+}
+function render(d) {
+  const a = d.app, root = document.getElementById("root");
+  root.innerHTML = "";
+  const hero = el("div", "hero");
+  if (a.photo) { const img = el("img", "avatar"); img.src = a.photo; img.alt = a.title; hero.append(img); }
+  hero.append(el("h1", "", a.title), el("p", "role", a.role), el("p", "intro", a.intro));
+  const facts = el("div", "facts"); (a.facts || []).forEach(f => facts.append(el("span", "chip", f))); hero.append(facts);
+  root.append(hero);
+  if (d.sale && a.sale_banner) root.append(el("div", "sale", a.sale_banner));
+  if (a.start_hint) root.append(el("p", "hint", a.start_hint));
+
+  root.append(el("h2", "", a.services_title));
+  d.cards.forEach(c => {
+    const card = el("div", "card");
+    if (c.photo) { const img = el("img"); img.src = c.photo; img.alt = c.name; img.loading = "lazy"; card.append(img); }
+    const b = el("div", "body");
+    b.append(el("p", "name", (c.icon ? c.icon + " " : "") + c.name), el("p", "text", c.text));
+    if (c.format) b.append(el("p", "meta", "💻 " + c.format));
+    b.append(priceLine(c, d.sale));
+    const main = el("button", "btn main", c.btn[0]); main.onclick = () => act(c.btn[1]); b.append(main);
+    if (c.more) { const m = el("button", "btn ghost", a.more_btn); m.onclick = () => act(c.more); b.append(m); }
+    card.append(b); root.append(card);
+  });
+
+  root.append(el("h2", "", a.contacts_title));
+  if (d.channel) { const ch = el("button", "btn channel", a.channel_btn); ch.onclick = () => openUrl(d.channel); root.append(ch); }
+  const list = el("div", "list");
+  d.links.forEach(([label, shown, url]) => {
+    const r = el("div", "row"); r.append(el("span", "", label), el("span", "", shown)); r.onclick = () => openUrl(url); list.append(r);
+  });
+  if (a.phone) {
+    const r = el("div", "row"); r.append(el("span", "", a.phone_note), el("span", "", a.phone));
+    r.onclick = () => {
+      const num = a.phone.replace(/[^+\d]/g, "");
+      if (navigator.clipboard) navigator.clipboard.writeText(num).then(() => toast(a.copied), () => toast(num));
+      else toast(num);
+    };
+    list.append(r);
+  }
+  root.append(list);
+  if (a.docs && a.docs.length) {
+    const docs = el("div", "docs");
+    a.docs.forEach(([t, action]) => { const x = el("button", "btn ghost", t); x.onclick = () => act(action); docs.append(x); });
+    root.append(docs);
+  }
+  if (a.footer) root.append(el("p", "footer", a.footer));
+}
+fetch("data.json", { cache: "no-store" }).then(r => r.json()).then(d => { DATA = d; render(d); })
+  .catch(() => { document.getElementById("root").innerHTML = '<div class="err">Не вдалося завантажити 🙏<br>Спробуйте ще раз за хвилинку.</div>'; });
+if (tg && tg.initData) fetch("open", { method: "POST", body: tg.initData }).catch(() => {});
+</script>
+</body>
+</html>

@@ -390,7 +390,8 @@ async def on_callback(update, context, data):
         await bot.send_message(chat_id, raffle_now_text(), parse_mode=HTML)
     elif data == "adv:ann":
         link = f"https://t.me/{bot.username}?start=advent"
-        await bot.send_message(chat_id, T.ADVENT_ANNOUNCE_TEXT.format(link=link), disable_web_page_preview=True)
+        await bot.send_message(chat_id, T.ADVENT_ANNOUNCE_TEXT.format(link=link), parse_mode=HTML,
+                               disable_web_page_preview=True)
     elif parts[1] == "win" and len(parts) == 3 and parts[2].isdigit():
         await confirm_winner(bot, chat_id, int(parts[2]))
     elif data == "adv:reroll":

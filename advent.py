@@ -182,7 +182,7 @@ def menu_tag(uid):
 
 
 def is_btn(text):
-    return text in (T.ADVENT_BTN_SOON, T.ADVENT_BTN)
+    return text in T.ADVENT_BTNS_ALL
 
 
 def page_url(day=0):

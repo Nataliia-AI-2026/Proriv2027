@@ -99,10 +99,10 @@ def kb_bottom(uid):
     url = webapp.app_url()
     if url:  # міні-застосунок (другий рядок) замість «Мої продукти» і «Контакти»
         # Путівник лише в застосунку; Прорив у меню тільки під час акції (по SALE_UNTIL), потім зникає сам
-        # 4 ряди: кнопки парами, Прорив і Путівник лише в застосунку; календар поруч із кабінетом (1.01 зникне сам)
+        # 4 ряди: кнопки парами, Прорив і Путівник лише в застосунку; календар поруч із тестами (1.01 зникне сам)
         adv = advent.menu_label(uid)
-        rows = [[main_button(), T.BTN_GIFT], [adv, T.BTN_CABINET] if adv else [T.BTN_CABINET],
-                [KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))], [T.BTN_QUIZ, T.BTN_ASK]]
+        rows = [[main_button(), T.BTN_GIFT], [T.BTN_QUIZ, adv] if adv else [T.BTN_QUIZ],
+                [KeyboardButton(T.BTN_APP, web_app=WebAppInfo(url))], [T.BTN_CABINET, T.BTN_ASK]]
     else:
         rows = [[main_button(), T.BTN_GIFT], *products, [T.BTN_QUIZ], [T.BTN_PRODUCTS, T.BTN_ASK],
                 [T.BTN_CABINET, T.BTN_CONTACTS]]

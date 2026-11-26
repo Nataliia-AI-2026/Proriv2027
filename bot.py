@@ -716,6 +716,14 @@ async def sale_end_job(context):
     await notify_admins(context.bot, T.SALE_END_REMINDER)
 
 
+async def post_to_admins(bot, p, markup):
+    for a in config.ADMIN_IDS:
+        try:
+            await send(bot, a, p["text"], markup, p.get("photo", ""))
+        except Exception as e:
+            log.warning("post copy to admin %s: %s", a, e)
+
+
 async def channel_posts_job(context):
     """Пости в групу за розкладом (T.CHANNEL_POSTS): копія власниці одразу, публікація в час "at", звіт."""
     bot = context.bot
@@ -736,24 +744,24 @@ async def channel_posts_job(context):
             if db.kv(f"cpost_prev:{key}") != "1":
                 db.kv(f"cpost_prev:{key}", "1")  # ДО відправки: копія приходить один раз
                 await notify_admins(bot, T.CHANNEL_POST_PREVIEW.format(at=at_txt))
-                await notify_admins(bot, p["text"], reply_markup=markup)
+                await post_to_admins(bot, p, markup)
             continue
         db.kv(f"cpost:{key}", "1")  # ДО відправки: після перезапуску повтору не буде
         if now > at + timedelta(hours=T.CHANNEL_POST_LATE_HOURS):
             await notify_admins(bot, T.CHANNEL_POST_LATE.format(at=at_txt))
-            await notify_admins(bot, p["text"], reply_markup=markup)
+            await post_to_admins(bot, p, markup)
             continue
         chat = channel_chat()
         try:
             if not chat:
                 raise RuntimeError(T.CHANNEL_POST_NOCHAT)
-            await bot.send_message(int(chat) if str(chat).lstrip("-").isdigit() else chat, p["text"],
-                                   parse_mode=HTML, disable_web_page_preview=True, reply_markup=markup)
+            await send(bot, int(chat) if str(chat).lstrip("-").isdigit() else chat, p["text"], markup,
+                       p.get("photo", ""))
             await notify_admins(bot, T.CHANNEL_POST_SENT.format(at=at_txt))
         except Exception as e:
             log.warning("channel post %s: %s", key, e)
             await notify_admins(bot, T.CHANNEL_POST_FAIL.format(at=at_txt, err=esc(str(e))))
-            await notify_admins(bot, p["text"], reply_markup=markup)
+            await post_to_admins(bot, p, markup)
 
 
 async def ideas_job(context):

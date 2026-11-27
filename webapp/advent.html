@@ -195,9 +195,35 @@ function render() {
   };
 }
 
+function subWin(n) {
+  const T = S.texts, d = S.days[n - 1];
+  const w = $("win"); w.textContent = "";
+  const x = el("button", "x", "×"); x.onclick = closeWin; w.append(x);
+  w.append(el("div", "k", `Віконце ${n} · ${d.date.replace(/^0/, "").replace(/\.12$/, " грудня")}`), el("h2", "", T.sub_head));
+  const body = el("div", "body"); body.append(el("p", "", T.sub_text)); w.append(body);
+  const go = el("button", "go", T.sub_btn);
+  go.onclick = () => { if (tg && S.channel) tg.openTelegramLink(S.channel); else if (S.channel) location.href = S.channel; };
+  w.append(go);
+  const row = el("div", "row");
+  const chk = el("button", "", T.sub_check);
+  chk.onclick = () => {
+    if (busy) return; busy = true; chk.disabled = true;
+    post("state").then(r => {
+      busy = false; chk.disabled = false;
+      if (!r || !r.ok) { toast(T.error); return; }
+      S = r; render();
+      if (S.sub) openWin(n); else toast(T.sub_not_yet);
+    }).catch(() => { busy = false; chk.disabled = false; toast(T.error); });
+  };
+  const back = el("button", "", T.back_btn); back.onclick = closeWin;
+  row.append(chk, back); w.append(row);
+  $("sheet").classList.add("on"); document.body.classList.add("lock"); w.scrollTop = 0;
+}
+
 function openWin(n) {
   const T = S.texts, d = S.days[n - 1];
   if (!d || !d.open) return;
+  if (S.sub === false) { subWin(n); return; }
   const w = $("win"); w.textContent = "";
   const x = el("button", "x", "×"); x.onclick = closeWin; w.append(x);
   w.append(el("div", "k", `Віконце ${n} · ${d.date.replace(/^0/, "").replace(/\.12$/, " грудня")}`), el("h2", "", d.title));
@@ -214,6 +240,7 @@ function openWin(n) {
       if (busy) return; busy = true; go.disabled = true;
       post("done", { day: n, answer: ta.value, share: cb.checked }).then(r => {
         busy = false; go.disabled = false;
+        if (r && r.need_sub) { S.sub = false; subWin(n); return; }
         if (!r || !r.ok) { toast(T.error); return; }
         const was = d.done; S = r; render(); closeWin();
         toast(was ? T.saved_toast : fmt(T.done_toast, { n }));

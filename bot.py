@@ -364,6 +364,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     qkey = quiz.link_key(src)
     if qkey is not None or src in T.BUY_GREET or (door and door.get("buy")):
         plan_remind(u.id)  # прийшла з ManyChat без обов'язкової підписки: нагадаємо про групу завтра
+    if src == "advent":
+        # адвент-календар за посиланням: одразу картка календаря, без обов'язкової підписки і без подарунка.
+        # Підписку на канал агент перевіряє, коли людина відкриває віконце.
+        await context.bot.send_message(chat_id, T.ADVENT_GREET.format(name=esc(u.first_name)), parse_mode=HTML,
+                                       reply_markup=kb_bottom(u.id))
+        await advent.entry(context.bot, chat_id, u.id)
+        if is_new and not config.is_admin(u.id):
+            total, _, _ = db.stats()
+            await notify_admins(context.bot, T.ADMIN_NEW_USER.format(who=who(u), src=esc(src), total=total))
+        return
     if qkey is not None:
         # тест за посиланням: одразу список тестів або вступ до тесту, без обов'язкової підписки
         await context.bot.send_message(chat_id, T.QUIZ_GREET.format(name=esc(u.first_name)), parse_mode=HTML,
@@ -939,7 +949,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in menu_buttons():
         state(uid, "")
         # Путівник, Прорив і Тести в меню без підписки
-        buy_btn = MENU_PRODUCT_BTNS.get(text) in T.BUY_PRODUCTS or text == T.BTN_QUIZ
+        buy_btn = MENU_PRODUCT_BTNS.get(text) in T.BUY_PRODUCTS or text == T.BTN_QUIZ or advent.is_btn(text)
         if not buy_btn and not await gate_ok(context.bot, chat_id, uid):
             return
         if launch and text == T.BTN_LAUNCH:

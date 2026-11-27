@@ -28,6 +28,7 @@ import webapp
 log = logging.getLogger("advent")
 HTML = ParseMode.HTML
 DAYS = 31
+SUB_CACHE = 600  # підписку на сторінці календаря перевіряємо не частіше, ніж раз на 10 хвилин
 H = SimpleNamespace()   # функції агента (bot.py передає їх у bind), щоб не імпортувати bot.py
 
 
@@ -232,17 +233,34 @@ async def send_card(bot, chat_id, uid, pin=False):
 
 
 async def entry(bot, chat_id, uid):
-    """Кнопка меню «🎄 Адвент-календар» або посилання ?start=advent."""
-    if not config.is_admin(uid) and await H.is_member(bot, uid) is False:
-        db.log_ev(uid, "invite")
-        await bot.send_message(chat_id, T.ADVENT_INVITE, parse_mode=HTML,
-                               reply_markup=InlineKeyboardMarkup([
-                                   [InlineKeyboardButton(T.BTN_JOIN_GROUP, url=T.CHANNEL_LINK)],
-                                   [InlineKeyboardButton(T.ADVENT_INVITE_CHECK, callback_data="adv:check")]]))
-        return
+    """Кнопка меню «🎄 Адвент-календар» або посилання ?start=advent.
+    Календар бачать усі одразу; віконця відкриваються лише підписницям каналу (перевірка на сторінці)."""
     new = join(uid)
     db.log_ev(uid, "adv_menu")
     await send_card(bot, chat_id, uid, pin=new or not (member(uid) or {}).get("pin_msg"))
+    if not config.is_admin(uid) and await H.is_member(bot, uid) is False:
+        db.log_ev(uid, "invite")
+        await bot.send_message(chat_id, T.ADVENT_INVITE, parse_mode=HTML, reply_markup=sub_markup())
+
+
+def sub_markup():
+    return InlineKeyboardMarkup([[InlineKeyboardButton(T.ADVENT_SUB_BTN, url=T.CHANNEL_LINK)],
+                                 [InlineKeyboardButton(T.ADVENT_INVITE_CHECK, callback_data="adv:check")]])
+
+
+def subscribed(uid):
+    """Чи підписана людина на канал (з потоку вебсервера). Не вдалося перевірити: пускаємо."""
+    if config.is_admin(uid):
+        return True
+    last = db.kv(f"gate:{uid}")
+    if last and last.isdigit() and time.time() - int(last) < SUB_CACHE:
+        return True
+    try:
+        ok = asyncio.run_coroutine_threadsafe(H.is_member(H.bot, uid), H.loop).result(timeout=8)
+    except Exception as e:
+        log.warning("advent sub check %s: %s", uid, e)
+        return True
+    return ok is not False
 
 
 # ================== знижки ==================
@@ -360,7 +378,9 @@ async def on_callback(update, context, data):
         if await H.is_member(bot, uid) is False:
             await bot.send_message(chat_id, T.GATE_NOT_YET)
         else:
-            await entry(bot, chat_id, uid)
+            join(uid)
+            db.log_ev(uid, "adv_sub")
+            await bot.send_message(chat_id, T.ADVENT_SUB_OK, parse_mode=HTML, reply_markup=card_markup(uid))
     elif data in ("adv:mute", "adv:unmute"):
         if not member(uid):
             return
@@ -649,7 +669,7 @@ def unlocked(uid, day):
     return 1 <= day <= today_n()
 
 
-def page_state(uid):
+def page_state(uid, sub=True):
     ph = user_phase(uid)
     n = today_n()
     dm = done_map(uid)
@@ -658,7 +678,7 @@ def page_state(uid):
         title, text, task = T.ADVENT_DAYS[d - 1]
         item = {"n": d, "gift": d in T.ADVENT_GIFTS, "done": d in dm, "open": unlocked(uid, d),
                 "date": ddmm(start_date() + timedelta(days=d - 1))}
-        if item["open"]:
+        if item["open"] and sub:
             item.update(title=title, text=text, task=task, answer=dm.get(d, {}).get("answer", ""),
                         share=bool(dm.get(d, {}).get("share")))
             if d in T.ADVENT_GIFTS:
@@ -673,7 +693,7 @@ def page_state(uid):
         days.append(item)
     return {"ok": True, "phase": ph, "today": n, "left": left_text(), "done": len(dm), "need": T.ADVENT_RAFFLE_MIN,
             "days": days, "can_done": ph in ("live", "soon") and (ph == "live" or config.is_admin(uid)),
-            "texts": T.ADVENT_PAGE}
+            "texts": T.ADVENT_PAGE, "sub": sub, "channel": T.CHANNEL_LINK}
 
 
 def api(path, body):
@@ -686,23 +706,24 @@ def api(path, body):
     if not uid:
         return 403, {"ok": False, "error": "auth"}
     if not member(uid):
-        if config.is_admin(uid):
-            join(uid)
-        else:
-            return 200, {"ok": False, "need_join": True, "texts": T.ADVENT_PAGE}
+        join(uid)   # календар бачать усі; віконця відкриваються підписницям каналу
     action = path.rsplit("/", 1)[-1]
     day = req.get("day")
     day = int(day) if str(day).isdigit() else 0
+    sub = subscribed(uid)
     if action == "state":
         db.log_ev(uid, "adv_page")
-        return 200, page_state(uid)
+        return 200, page_state(uid, sub)
+    if not sub:
+        db.log_ev(uid, "adv_need_sub")
+        return 200, {"ok": False, "need_sub": True}
     if not unlocked(uid, day):
         return 200, {"ok": False, "error": "locked"}
     if action == "seen":
         db.log_ev(uid, "adv_window", str(day))
         return 200, {"ok": True}
     if action == "done":
-        st = page_state(uid)
+        st = page_state(uid, sub)
         if not st["can_done"] and not config.is_admin(uid):
             return 200, {"ok": False, "error": "over"}
         answer = str(req.get("answer") or "").strip()[:3000]
@@ -719,7 +740,7 @@ def api(path, body):
             _run(H.bot.send_message(uid, text, parse_mode=HTML))
         if answer:
             db.log_ev(uid, "adv_answer", str(day))
-        return 200, page_state(uid)
+        return 200, page_state(uid, sub)
     if action == "gift":
         key = str(req.get("key") or "")
         _run(take_gift(H.bot, uid, uid, day, key))

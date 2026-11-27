@@ -364,6 +364,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     qkey = quiz.link_key(src)
     if qkey is not None or src in T.BUY_GREET or (door and door.get("buy")):
         plan_remind(u.id)  # прийшла з ManyChat без обов'язкової підписки: нагадаємо про групу завтра
+    if src == "advent":
+        # адвент-календар за посиланням: одразу картка календаря, без обов'язкової підписки і без подарунка.
+        # Підписку на канал агент перевіряє, коли людина відкриває віконце.
+        await context.bot.send_message(chat_id, T.ADVENT_GREET.format(name=esc(u.first_name)), parse_mode=HTML,
+                                       reply_markup=kb_bottom(u.id))
+        await advent.entry(context.bot, chat_id, u.id)
+        if is_new and not config.is_admin(u.id):
+            total, _, _ = db.stats()
+            await notify_admins(context.bot, T.ADMIN_NEW_USER.format(who=who(u), src=esc(src), total=total))
+        return
     if qkey is not None:
         # тест за посиланням: одразу список тестів або вступ до тесту, без обов'язкової підписки
         await context.bot.send_message(chat_id, T.QUIZ_GREET.format(name=esc(u.first_name)), parse_mode=HTML,
@@ -716,6 +726,54 @@ async def sale_end_job(context):
     await notify_admins(context.bot, T.SALE_END_REMINDER)
 
 
+async def post_to_admins(bot, p, markup):
+    for a in config.ADMIN_IDS:
+        try:
+            await send(bot, a, p["text"], markup, p.get("photo", ""))
+        except Exception as e:
+            log.warning("post copy to admin %s: %s", a, e)
+
+
+async def channel_posts_job(context):
+    """Пости в групу за розкладом (T.CHANNEL_POSTS): копія власниці одразу, публікація в час "at", звіт."""
+    bot = context.bot
+    now = datetime.now(config.TZ)
+    for p in getattr(T, "CHANNEL_POSTS", []):
+        key = p["key"]
+        try:
+            at = datetime.strptime(p["at"], "%Y-%m-%d %H:%M").replace(tzinfo=config.TZ)
+        except (KeyError, ValueError):
+            log.warning("channel post %s: bad time", key)
+            continue
+        at_txt = at.strftime("%d.%m о %H:%M")
+        btn = p.get("button")
+        markup = kb([[btn]]) if btn else None
+        if db.kv(f"cpost:{key}") == "1":
+            continue
+        if now < at:
+            if db.kv(f"cpost_prev:{key}") != "1":
+                db.kv(f"cpost_prev:{key}", "1")  # ДО відправки: копія приходить один раз
+                await notify_admins(bot, T.CHANNEL_POST_PREVIEW.format(at=at_txt))
+                await post_to_admins(bot, p, markup)
+            continue
+        db.kv(f"cpost:{key}", "1")  # ДО відправки: після перезапуску повтору не буде
+        if now > at + timedelta(hours=T.CHANNEL_POST_LATE_HOURS):
+            await notify_admins(bot, T.CHANNEL_POST_LATE.format(at=at_txt))
+            await post_to_admins(bot, p, markup)
+            continue
+        chat = channel_chat()
+        try:
+            if not chat:
+                raise RuntimeError(T.CHANNEL_POST_NOCHAT)
+            await send(bot, int(chat) if str(chat).lstrip("-").isdigit() else chat, p["text"], markup,
+                       p.get("photo", ""))
+            await notify_admins(bot, T.CHANNEL_POST_SENT.format(at=at_txt))
+        except Exception as e:
+            log.warning("channel post %s: %s", key, e)
+            await notify_admins(bot, T.CHANNEL_POST_FAIL.format(at=at_txt, err=esc(str(e))))
+            await post_to_admins(bot, p, markup)
+
+
 async def ideas_job(context):
     """Щовечора о IDEAS_HOUR нагадує власниці про невиконані ідеї (один раз на день)."""
     now = datetime.now(config.TZ)
@@ -891,7 +949,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in menu_buttons():
         state(uid, "")
         # Путівник, Прорив і Тести в меню без підписки
-        buy_btn = MENU_PRODUCT_BTNS.get(text) in T.BUY_PRODUCTS or text == T.BTN_QUIZ
+        buy_btn = MENU_PRODUCT_BTNS.get(text) in T.BUY_PRODUCTS or text == T.BTN_QUIZ or advent.is_btn(text)
         if not buy_btn and not await gate_ok(context.bot, chat_id, uid):
             return
         if launch and text == T.BTN_LAUNCH:
@@ -1205,6 +1263,7 @@ def main():
     app.job_queue.run_repeating(group_welcome_cleanup_job, interval=600, first=120)  # прибирає привітання в групі
     app.job_queue.run_repeating(remind_job, interval=600, first=150)
     app.job_queue.run_repeating(advent.daily_job, interval=120, first=45)  # адвент: віконце о 8:00, розіграш, підсумки
+    app.job_queue.run_repeating(channel_posts_job, interval=60, first=30)  # пости в групу за розкладом
     app.job_queue.run_repeating(sale_end_job, interval=600, first=180)  # нагадування після кінця акції  # нагадування про групу через добу
     app.add_error_handler(on_error)
     log.info("Агент запускається")
